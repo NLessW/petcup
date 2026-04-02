@@ -122,20 +122,23 @@ public:
         pinMode(dePin, OUTPUT);
         pinMode(rePin, OUTPUT);
         setReceiveMode(); // 기본은 수신 모드
-        Serial1.begin(baudRate); // Arduino Mega Serial1 사용
+        Serial2.begin(baudRate); // Arduino Mega Serial2 사용 (핀 16, 17)
     }
     
     void sendResponse(const char* msg) {
         setTransmitMode();
-        Serial1.print(msg);
-        Serial1.flush();
+        Serial2.print(msg);
+        Serial2.flush();
         setReceiveMode();
+        
+        // USB 시리얼로도 응답 전송 (테스트용)
+        Serial.print(msg);
     }
     
     bool readCommand(char* buffer, int maxLen) {
         int idx = 0;
-        while (Serial1.available() && idx < maxLen - 1) {
-            char c = Serial1.read();
+        while (Serial2.available() && idx < maxLen - 1) {
+            char c = Serial2.read();
             if (c == '\n' || c == '\r') {
                 buffer[idx] = '\0';
                 return idx > 0;
@@ -341,9 +344,28 @@ void loop() {
     // RS-485 명령 수신 및 처리
     static char cmdBuffer[64];
     if (rs485.readCommand(cmdBuffer, sizeof(cmdBuffer))) {
-        Serial.print("Received: "); // 디버그
+        Serial.print("Received (RS485): "); // 디버그
         Serial.println(cmdBuffer);
         processCommand(cmdBuffer);
     }
+    
+    // USB 시리얼로도 명령 받기 (테스트용)
+    static char usbBuffer[64];
+    static int usbIdx = 0;
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (usbIdx > 0) {
+                usbBuffer[usbIdx] = '\0';
+                Serial.print("Received (USB): ");
+                Serial.println(usbBuffer);
+                processCommand(usbBuffer);
+                usbIdx = 0;
+            }
+        } else if (usbIdx < 63) {
+            usbBuffer[usbIdx++] = c;
+        }
+    }
+    
     delay(10); // 짧은 딜레이
 }

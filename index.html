@@ -99,12 +99,23 @@
             }
 
             async function readSerialData() {
+                let buffer = '';
                 try {
                     while (true) {
                         const { value, done } = await reader.read();
                         if (done) break;
-                        if (value) {
-                            log('수신: ' + value.trim());
+
+                        // 받은 문자를 버퍼에 추가
+                        buffer += value;
+
+                        // 줄바꿈 문자가 있으면 한 줄씩 처리
+                        let newlineIndex;
+                        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+                            const line = buffer.substring(0, newlineIndex).trim();
+                            if (line.length > 0) {
+                                log('수신: ' + line);
+                            }
+                            buffer = buffer.substring(newlineIndex + 1);
                         }
                     }
                 } catch (error) {
