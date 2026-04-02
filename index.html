@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>페트컵 기능 테스트</title>
+    </head>
+    <body>
+        <h1>페트컵 투입구 제어 테스트</h1>
+
+        <div>
+            <h3>시리얼 포트 연결</h3>
+            <button onclick="connectSerial()" id="connectBtn">포트 연결</button>
+            <button onclick="disconnectSerial()" id="disconnectBtn" disabled>연결 해제</button>
+            <span id="connectionStatus">연결 안 됨</span>
+        </div>
+
+        <div>
+            <label>장치 ID: <input type="number" id="deviceId" value="1" min="1" max="255" /></label>
+        </div>
+
+        <div>
+            <h3>문 제어</h3>
+            <button onclick="sendCommand('OPEN')">문 열기 (OPEN)</button>
+            <button onclick="sendCommand('CLOSE')">문 닫기 (CLOSE)</button>
+            <button onclick="sendCommand('STOP')">정지 (STOP)</button>
+            <button onclick="sendCommand('STATUS')">상태 확인 (STATUS)</button>
+        </div>
+
+        <div>
+            <h3>속도 설정</h3>
+            <label>열기 속도: <input type="number" id="speedOpen" value="200" min="0" max="255" /></label>
+            <label>닫기 속도: <input type="number" id="speedClose" value="200" min="0" max="255" /></label>
+            <button onclick="setSpeed()">속도 설정 (SETSPEED)</button>
+        </div>
+
+        <div>
+            <h3>전송할 명령어</h3>
+            <pre id="commandOutput"></pre>
+        </div>
+
+        <div>
+            <h3>로그</h3>
+            <textarea id="log" rows="10" cols="60" readonly></textarea>
+            <button onclick="clearLog()">로그 지우기</button>
+        </div>
+
+        <script>
+            let port = null;
+            let reader = null;
+            let writer = null;
+
+            async function connectSerial() {
+                try {
+                    // Web Serial API로 포트 선택
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 9600 });
+
+                    const textDecoder = new TextDecoderStream();
+                    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                    reader = textDecoder.readable.getReader();
+
+                    writer = port.writable.getWriter();
+
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('connectionStatus').textContent = '연결됨';
+                    log('시리얼 포트 연결 성공');
+
+                    // 수신 데이터 읽기
+                    readSerialData();
+                } catch (error) {
+                    log('연결 실패: ' + error.message);
+                }
+            }
+
+            async function disconnectSerial() {
+                try {
+                    if (reader) {
+                        await reader.cancel();
+                        reader = null;
+                    }
+                    if (writer) {
+                        await writer.close();
+                        writer = null;
+                    }
+                    if (port) {
+                        await port.close();
+                        port = null;
+                    }
+
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('connectionStatus').textContent = '연결 안 됨';
+                    log('시리얼 포트 연결 해제');
+                } catch (error) {
+                    log('연결 해제 실패: ' + error.message);
+                }
+            }
+
+            async function readSerialData() {
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (value) {
+                            log('수신: ' + value.trim());
+                        }
+                    }
+                } catch (error) {
+                    log('수신 오류: ' + error.message);
+                }
+            }
+
+            async function writeToSerial(data) {
+                if (!writer) {
+                    log('포트가 연결되지 않았습니다.');
+                    return;
+                }
+                try {
+                    await writer.write(data + '\n');
+                } catch (error) {
+                    log('전송 오류: ' + error.message);
+                }
+            }
+
+            function sendCommand(cmd) {
+                const deviceId = document.getElementById('deviceId').value;
+                const command = `${deviceId}:${cmd}`;
+                displayCommand(command);
+                log(`전송: ${command}`);
+                writeToSerial(command);
+            }
+
+            function setSpeed() {
+                const deviceId = document.getElementById('deviceId').value;
+                const speedOpen = document.getElementById('speedOpen').value;
+                const speedClose = document.getElementById('speedClose').value;
+                const command = `${deviceId}:SETSPEED:${speedOpen}:${speedClose}`;
+                displayCommand(command);
+                log(`전송: ${command}`);
+                writeToSerial(command);
+            }
+
+            function displayCommand(cmd) {
+                document.getElementById('commandOutput').textContent = cmd;
+            }
+
+            function log(message) {
+                const logArea = document.getElementById('log');
+                const timestamp = new Date().toLocaleTimeString();
+                logArea.value += `[${timestamp}] ${message}\n`;
+                logArea.scrollTop = logArea.scrollHeight;
+            }
+
+            function clearLog() {
+                document.getElementById('log').value = '';
+            }
+
+            // 초기 메시지
+            log('페트컵 테스트 페이지 시작');
+            log('명령 형식: <ID>:<CMD>:<PARAM>');
+
+            // Web Serial API 지원 확인
+            if (!('serial' in navigator)) {
+                log('경고: 이 브라우저는 Web Serial API를 지원하지 않습니다.');
+                log('Chrome/Edge 브라우저를 사용하세요.');
+            }
+        </script>
+    </body>
+</html>
