@@ -60,8 +60,6 @@
     int speed_DC = Defaults::SPEED_DC; // Speed for Door Close
  }
 
- SystemState sys;
-
  // 모터드라이버 추상화 클래스
 class MotorDriver {
 private:

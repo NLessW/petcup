@@ -118,7 +118,9 @@
                     return;
                 }
                 try {
-                    await writer.write(data + '\n');
+                    const encoder = new TextEncoder();
+                    const encodedData = encoder.encode(data + '\n');
+                    await writer.write(encodedData);
                 } catch (error) {
                     log('전송 오류: ' + error.message);
                 }
