@@ -11,16 +11,22 @@
         <div>
             <h3>시리얼 포트 연결</h3>
             <div>
-                <strong>페트컵 제어 (COM8 RS-485):</strong>
+                <strong>📦 페트컵 제어 (COM8 RS-485):</strong>
                 <button onclick="connectPetcup()" id="connectPetcupBtn">연결</button>
                 <button onclick="disconnectPetcup()" id="disconnectPetcupBtn" disabled>해제</button>
                 <span id="petcupStatus">연결 안 됨</span>
             </div>
             <div>
-                <strong>레이더/서보 (COM9):</strong>
+                <strong>📡 레이더 센서 (COM9):</strong>
                 <button onclick="connectRadar()" id="connectRadarBtn">연결</button>
                 <button onclick="disconnectRadar()" id="disconnectRadarBtn" disabled>해제</button>
                 <span id="radarStatus">연결 안 됨</span>
+            </div>
+            <div>
+                <strong>🤖 XL430 서보 (COM5):</strong>
+                <button onclick="connectServo()" id="connectServoBtn">연결</button>
+                <button onclick="disconnectServo()" id="disconnectServoBtn" disabled>해제</button>
+                <span id="servoStatus">연결 안 됨</span>
             </div>
         </div>
 
@@ -61,12 +67,27 @@
         </div>
 
         <div>
-            <h3>레이더 센서 / 서보 모터</h3>
-            <label>서보 각도: <input type="number" id="servoAngle" value="90" min="0" max="180" /></label>
-            <button onclick="sendServoCommand()">서보 제어</button>
-            <br />
-            <button onclick="requestRadarData()">레이더 데이터 요청</button>
-            <div id="radarData">레이더: 대기중...</div>
+            <h3>🎯 레이더 거리 센서</h3>
+            <div id="radarData" style="margin: 10px 0; padding: 15px; background: #e8f5e9; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; color: #2e7d32;">거리: 대기중...</div>
+            <button onclick="requestRadarData()">📡 거리 측정 요청</button>
+        </div>
+
+        <div>
+            <h3>🤖 XL430 서보 모터 (Dynamixel)</h3>
+            <div>
+                <label>Dynamixel ID: <input type="number" id="dxlId" value="1" min="0" max="252" style="width: 60px;" /></label>
+                <button onclick="enableServo()">토크 ON</button>
+                <button onclick="disableServo()">토크 OFF</button>
+            </div>
+            <div style="margin-top: 10px;">
+                <label>목표 위치 (0-4095): <input type="number" id="servoPosition" value="2048" min="0" max="4095" /></label>
+                <button onclick="setServoPosition()">위치 이동</button>
+            </div>
+            <div style="margin-top: 10px;">
+                <label>목표 각도 (0-360°): <input type="number" id="servoAngle" value="180" min="0" max="360" step="0.1" /></label>
+                <button onclick="setServoAngle()">각도 이동</button>
+            </div>
+            <div id="servoData" style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px;">서보: 대기중...</div>
         </div>
 
         <div>
