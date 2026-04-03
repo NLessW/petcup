@@ -415,30 +415,26 @@ function requestRadarData() {
 }
 
 // XL430 서보 명령
-function setServoPosition() {
+function moveForward() {
     const id = getDxlId();
-    const position = parseInt(document.getElementById('servoPosition').value);
-    if (position < 0 || position > 4095) {
-        log('[서보] 위치 범위 오류: 0-4095 사이 값을 입력하세요');
-        return;
-    }
-    const packet = buildPositionPacket(id, position);
-    log(`[서보] ID ${id} 위치 이동: ${position} (0x${position.toString(16)})`);
-    writeToServo(packet);
-}
-
-function setServoAngle() {
-    const id = getDxlId();
-    const angle = parseFloat(document.getElementById('servoAngle').value);
-    if (angle < 0 || angle > 360) {
-        log('[서보] 각도 범위 오류: 0-360° 사이 값을 입력하세요');
-        return;
-    }
+    const angle = 268.3;
     // 각도를 위치값으로 변환 (0-360° → 0-4095)
     const position = Math.round((angle / 360) * 4095);
     const packet = buildPositionPacket(id, position);
-    log(`[서보] ID ${id} 각도 이동: ${angle}° → 위치 ${position}`);
+    log(`[서보] ID ${id} 앞으로 이동: ${angle}° → 위치 ${position}`);
     writeToServo(packet);
+    document.getElementById('servoData').textContent = `서보: 앞으로 (${angle}°)`;
+}
+
+function moveBackward() {
+    const id = getDxlId();
+    const angle = 323;
+    // 각도를 위치값으로 변환 (0-360° → 0-4095)
+    const position = Math.round((angle / 360) * 4095);
+    const packet = buildPositionPacket(id, position);
+    log(`[서보] ID ${id} 뒤로 이동: ${angle}° → 위치 ${position}`);
+    writeToServo(packet);
+    document.getElementById('servoData').textContent = `서보: 뒤로 (${angle}°)`;
 }
 
 function enableServo() {

@@ -75,17 +75,13 @@
         <div>
             <h3>🤖 XL430 서보 모터 (Dynamixel)</h3>
             <div>
-                <label>Dynamixel ID: <input type="number" id="dxlId" value="1" min="0" max="252" style="width: 60px;" /></label>
+                <label>Dynamixel ID: <input type="number" id="dxlId" value="2" min="0" max="252" style="width: 60px;" /></label>
                 <button onclick="enableServo()">토크 ON</button>
                 <button onclick="disableServo()">토크 OFF</button>
             </div>
             <div style="margin-top: 10px;">
-                <label>목표 위치 (0-4095): <input type="number" id="servoPosition" value="2048" min="0" max="4095" /></label>
-                <button onclick="setServoPosition()">위치 이동</button>
-            </div>
-            <div style="margin-top: 10px;">
-                <label>목표 각도 (0-360°): <input type="number" id="servoAngle" value="180" min="0" max="360" step="0.1" /></label>
-                <button onclick="setServoAngle()">각도 이동</button>
+                <button onclick="moveForward()" style="font-size: 16px; padding: 10px 20px;">⬆️ 앞으로 (268.3°)</button>
+                <button onclick="moveBackward()" style="font-size: 16px; padding: 10px 20px;">⬇️ 뒤로 (323°)</button>
             </div>
             <div id="servoData" style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px;">서보: 대기중...</div>
         </div>
