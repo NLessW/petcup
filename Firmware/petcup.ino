@@ -116,13 +116,13 @@ private:
     void setTransmitMode() {
         digitalWrite(dePin, HIGH);
         digitalWrite(rePin, HIGH);
-        delayMicroseconds(10);
+        delayMicroseconds(100); // 타이밍 증가: 10 → 100
     }
     
     void setReceiveMode() {
         digitalWrite(dePin, LOW);
         digitalWrite(rePin, LOW);
-        delayMicroseconds(10);
+        delayMicroseconds(100); // 타이밍 증가: 10 → 100
     }
 
 public:
@@ -136,10 +136,15 @@ public:
     }
     
     void sendResponse(const char* msg) {
+        // 응답 전 충분한 대기 (RS-485 안정화)
+        delay(20);
+        
         // RS-485로 응답 전송
         setTransmitMode();
+        delay(5); // 송신 모드 충분한 안정화
         Serial3.print(msg);
         Serial3.flush();
+        delay(10); // 전송 완료 충분한 대기
         setReceiveMode();
         
         // USB로도 응답 전송 (웹 브라우저 테스트용)
@@ -448,7 +453,16 @@ void loop() {
         // 디버깅: RS-485로 받은 명령을 USB로 출력
         Serial.print("RS485_RX: ");
         Serial.println(cmdBuffer);
+        
+        // 명령 처리 전 대기
+        delay(5);
         processCommand(cmdBuffer);
+        
+        // 처리 후 남은 데이터 클리어
+        delay(5);
+        while(Serial3.available()) {
+            Serial3.read();
+        }
     }
     
     // USB 시리얼로도 명령 받기 (웹 테스트용 - 응답은 RS-485로도 전송)

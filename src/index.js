@@ -84,6 +84,8 @@ async function writeToSerial(data) {
         const encoder = new TextEncoder();
         const encodedData = encoder.encode(data + '\n');
         await writer.write(encodedData);
+        // 전송 후 충분한 대기 (RS-485 안정화)
+        await new Promise((resolve) => setTimeout(resolve, 100));
     } catch (error) {
         log('전송 오류: ' + error.message);
     }
