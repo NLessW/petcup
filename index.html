@@ -68,22 +68,62 @@
 
         <div>
             <h3>🎯 레이더 거리 센서</h3>
-            <div id="radarData" style="margin: 10px 0; padding: 15px; background: #e8f5e9; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; color: #2e7d32;">거리: 대기중...</div>
+            <div
+                id="radarData"
+                style="
+                    margin: 10px 0;
+                    padding: 15px;
+                    background: #e8f5e9;
+                    border-radius: 8px;
+                    text-align: center;
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #2e7d32;
+                "
+            >
+                거리: 대기중...
+            </div>
             <button onclick="requestRadarData()">📡 거리 측정 요청</button>
         </div>
 
         <div>
-            <h3>🤖 XL430 서보 모터 (Dynamixel)</h3>
+            <h3>🤖 XL430 서보 모터 (Dynamixel ID:2)</h3>
             <div>
-                <label>Dynamixel ID: <input type="number" id="dxlId" value="2" min="0" max="252" style="width: 60px;" /></label>
                 <button onclick="enableServo()">토크 ON</button>
                 <button onclick="disableServo()">토크 OFF</button>
             </div>
-            <div style="margin-top: 10px;">
-                <button onclick="moveForward()" style="font-size: 16px; padding: 10px 20px;">⬆️ 앞으로 (268.3°)</button>
-                <button onclick="moveBackward()" style="font-size: 16px; padding: 10px 20px;">⬇️ 뒤로 (323°)</button>
+            <div style="margin-top: 10px">
+                <button onclick="moveForward()" style="font-size: 16px; padding: 10px 20px">⬆️ 앞으로 (268.3°)</button>
+                <button onclick="moveBackward()" style="font-size: 16px; padding: 10px 20px">⬇️ 뒤로 (323°)</button>
             </div>
-            <div id="servoData" style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px;">서보: 대기중...</div>
+            <div id="servoData" style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px">
+                서보: 대기중...
+            </div>
+        </div>
+
+        <div>
+            <h3>🤏 그리퍼 제어 (Dynamixel ID:1)</h3>
+            <div>
+                <button onclick="enableGripper()">토크 ON</button>
+                <button onclick="disableGripper()">토크 OFF</button>
+            </div>
+            <div style="margin-top: 10px">
+                <button
+                    onclick="openGripper()"
+                    style="font-size: 16px; padding: 10px 20px; background: #4caf50; color: white"
+                >
+                    ✋ 열기 (154°)
+                </button>
+                <button
+                    onclick="closeGripper()"
+                    style="font-size: 16px; padding: 10px 20px; background: #f44336; color: white"
+                >
+                    ✊ 닫기 (184°)
+                </button>
+            </div>
+            <div id="gripperData" style="margin: 10px 0; padding: 10px; background: #fff3e0; border-radius: 4px">
+                그리퍼: 대기중...
+            </div>
         </div>
 
         <div>

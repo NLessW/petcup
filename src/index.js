@@ -414,9 +414,9 @@ function requestRadarData() {
     writeToRadar(command);
 }
 
-// XL430 서보 명령
+// XL430 서보 명령 (ID 2)
 function moveForward() {
-    const id = getDxlId();
+    const id = 2;
     const angle = 268.3;
     // 각도를 위치값으로 변환 (0-360° → 0-4095)
     const position = Math.round((angle / 360) * 4095);
@@ -427,7 +427,7 @@ function moveForward() {
 }
 
 function moveBackward() {
-    const id = getDxlId();
+    const id = 2;
     const angle = 323;
     // 각도를 위치값으로 변환 (0-360° → 0-4095)
     const position = Math.round((angle / 360) * 4095);
@@ -437,8 +437,45 @@ function moveBackward() {
     document.getElementById('servoData').textContent = `서보: 뒤로 (${angle}°)`;
 }
 
+// 그리퍼 명령 (ID 1)
+function openGripper() {
+    const id = 1;
+    const angle = 154;
+    const position = Math.round((angle / 360) * 4095);
+    const packet = buildPositionPacket(id, position);
+    log(`[그리퍼] ID ${id} 열기: ${angle}° → 위치 ${position}`);
+    writeToServo(packet);
+    document.getElementById('gripperData').textContent = `그리퍼: 열기 (${angle}°)`;
+}
+
+function closeGripper() {
+    const id = 1;
+    const angle = 184;
+    const position = Math.round((angle / 360) * 4095);
+    const packet = buildPositionPacket(id, position);
+    log(`[그리퍼] ID ${id} 닫기: ${angle}° → 위치 ${position}`);
+    writeToServo(packet);
+    document.getElementById('gripperData').textContent = `그리퍼: 닫기 (${angle}°) - 물체 감지 시 자동 정지`;
+}
+
+function enableGripper() {
+    const id = 1;
+    const packet = buildTorquePacket(id, true);
+    log(`[그리퍼] ID ${id} 토크 활성화`);
+    writeToServo(packet);
+    document.getElementById('gripperData').textContent = `그리퍼 ID ${id}: 토크 ON`;
+}
+
+function disableGripper() {
+    const id = 1;
+    const packet = buildTorquePacket(id, false);
+    log(`[그리퍼] ID ${id} 토크 비활성화`);
+    writeToServo(packet);
+    document.getElementById('gripperData').textContent = `그리퍼 ID ${id}: 토크 OFF`;
+}
+
 function enableServo() {
-    const id = getDxlId();
+    const id = 2;
     const packet = buildTorquePacket(id, true);
     log(`[서보] ID ${id} 토크 활성화`);
     writeToServo(packet);
@@ -446,7 +483,7 @@ function enableServo() {
 }
 
 function disableServo() {
-    const id = getDxlId();
+    const id = 2;
     const packet = buildTorquePacket(id, false);
     log(`[서보] ID ${id} 토크 비활성화`);
     writeToServo(packet);
