@@ -154,16 +154,32 @@ public:
     
     bool readCommand(char* buffer, int maxLen) {
         int idx = 0;
-        while (Serial3.available() && idx < maxLen - 1) {
-            char c = Serial3.read();
-            if (c == '\n' || c == '\r') {
-                buffer[idx] = '\0';
-                return idx > 0;
+        unsigned long startTime = millis();
+        const unsigned long TIMEOUT = 100; // 100ms 타임아웃
+        
+        while (millis() - startTime < TIMEOUT) {
+            if (Serial3.available()) {
+                char c = Serial3.read();
+                
+                if (c == '\n' || c == '\r') {
+                    if (idx > 0) {
+                        buffer[idx] = '\0';
+                        return true;
+                    }
+                } else if (idx < maxLen - 1) {
+                    buffer[idx++] = c;
+                    startTime = millis(); // 데이터 수신 시 타임아웃 갱신
+                }
             }
-            buffer[idx++] = c;
         }
-        buffer[idx] = '\0';
-        return idx > 0;
+        
+        // 타임아웃 또는 버퍼 가득 참
+        if (idx > 0) {
+            buffer[idx] = '\0';
+            return true;
+        }
+        
+        return false;
     }
     
     int getDeviceID() { return deviceID; }

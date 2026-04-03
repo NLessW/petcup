@@ -6,13 +6,22 @@
         <title>페트컵 기능 테스트</title>
     </head>
     <body>
-        <h1>페트컵 제어 테스트</h1>
+        <h1>페트컵 통합 제어 시스템</h1>
 
         <div>
             <h3>시리얼 포트 연결</h3>
-            <button onclick="connectSerial()" id="connectBtn">포트 연결</button>
-            <button onclick="disconnectSerial()" id="disconnectBtn" disabled>연결 해제</button>
-            <span id="connectionStatus">연결 안 됨</span>
+            <div>
+                <strong>페트컵 제어 (COM8 RS-485):</strong>
+                <button onclick="connectPetcup()" id="connectPetcupBtn">연결</button>
+                <button onclick="disconnectPetcup()" id="disconnectPetcupBtn" disabled>해제</button>
+                <span id="petcupStatus">연결 안 됨</span>
+            </div>
+            <div>
+                <strong>레이더/서보 (COM9):</strong>
+                <button onclick="connectRadar()" id="connectRadarBtn">연결</button>
+                <button onclick="disconnectRadar()" id="disconnectRadarBtn" disabled>해제</button>
+                <span id="radarStatus">연결 안 됨</span>
+            </div>
         </div>
 
         <div>
@@ -49,6 +58,15 @@
             <button onclick="sendCommand('FAN1:OFF')">팬1 OFF</button>
             <button onclick="sendCommand('FAN2:ON')">팬2 ON</button>
             <button onclick="sendCommand('FAN2:OFF')">팬2 OFF</button>
+        </div>
+
+        <div>
+            <h3>레이더 센서 / 서보 모터</h3>
+            <label>서보 각도: <input type="number" id="servoAngle" value="90" min="0" max="180" /></label>
+            <button onclick="sendServoCommand()">서보 제어</button>
+            <br />
+            <button onclick="requestRadarData()">레이더 데이터 요청</button>
+            <div id="radarData">레이더: 대기중...</div>
         </div>
 
         <div>
