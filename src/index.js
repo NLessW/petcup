@@ -440,7 +440,7 @@ function moveBackward() {
 // 그리퍼 명령 (ID 1)
 function openGripper() {
     const id = 1;
-    const angle = 154;
+    const angle = 160;
     const position = Math.round((angle / 360) * 4095);
     const packet = buildPositionPacket(id, position);
     log(`[그리퍼] ID ${id} 열기: ${angle}° → 위치 ${position}`);
