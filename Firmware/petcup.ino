@@ -41,6 +41,16 @@
     // SENSORS
     constexpr int SENSOR_DOOR_OPEN = 36;
     constexpr int SENSOR_DOOR_CLOSE = 37;
+
+    // Water pump
+    constexpr int WATER_PUMP = 45;
+
+    // UV Light
+    constexpr int UV_LIGHT = 49;
+
+    // Fan
+    constexpr int FAN1 = 43;
+    constexpr int FAN2 = 44;
  }
 
  namespace EEPROM_Addr {
@@ -122,23 +132,25 @@ public:
         pinMode(dePin, OUTPUT);
         pinMode(rePin, OUTPUT);
         setReceiveMode(); // 기본은 수신 모드
-        Serial2.begin(baudRate); // Arduino Mega Serial2 사용 (핀 16, 17)
+        Serial3.begin(baudRate); // Arduino Mega Serial3 사용 (핀 14, 15)
     }
     
     void sendResponse(const char* msg) {
+        // RS-485로 응답 전송
         setTransmitMode();
-        Serial2.print(msg);
-        Serial2.flush();
+        Serial3.print(msg);
+        Serial3.flush();
         setReceiveMode();
         
-        // USB 시리얼로도 응답 전송 (테스트용)
+        // USB로도 응답 전송 (웹 브라우저 테스트용)
         Serial.print(msg);
+        Serial.flush();
     }
     
     bool readCommand(char* buffer, int maxLen) {
         int idx = 0;
-        while (Serial2.available() && idx < maxLen - 1) {
-            char c = Serial2.read();
+        while (Serial3.available() && idx < maxLen - 1) {
+            char c = Serial3.read();
             if (c == '\n' || c == '\r') {
                 buffer[idx] = '\0';
                 return idx > 0;
@@ -177,33 +189,27 @@ public:
           speedOpen(spOpen), speedClose(spClose), state(DOOR_IDLE) {}
     
     void init() {
-        pinMode(sensorOpen, INPUT_PULLUP);
-        pinMode(sensorClose, INPUT_PULLUP);
+        pinMode(sensorOpen, INPUT);
+        pinMode(sensorClose, INPUT);
         motor.init();
     }
     
     bool isDoorOpen() {
-        return digitalRead(sensorOpen) == LOW; // 센서 활성화 시 LOW
+        return digitalRead(sensorOpen) == HIGH; // 센서 활성화 시 HIGH
     }
     
     bool isDoorClosed() {
-        return digitalRead(sensorClose) == LOW; // 센서 활성화 시 LOW
+        return digitalRead(sensorClose) == HIGH; // 센서 활성화 시 HIGH
     }
     
     void openDoor() {
-        if (isDoorOpen()) {
-            state = DOOR_OPEN;
-            return;
-        }
+        // 무조건 모터 시작, 센서는 update()에서 확인
         state = DOOR_OPENING;
         motor.forward(speedOpen);
     }
     
     void closeDoor() {
-        if (isDoorClosed()) {
-            state = DOOR_CLOSED;
-            return;
-        }
+        // 무조건 모터 시작, 센서는 update()에서 확인
         state = DOOR_CLOSING;
         motor.backward(speedClose);
     }
@@ -227,6 +233,20 @@ public:
                     state = DOOR_CLOSED;
                 }
                 break;
+            case DOOR_OPEN:
+                // 열림 센서에서 떨어지면 자동으로 닫기 시작
+                if (!isDoorOpen()) {
+                    state = DOOR_CLOSING;
+                    motor.backward(speedClose);
+                }
+                break;
+            case DOOR_CLOSED:
+                // 닫힘 센서에서 떨어지면 자동으로 열기 시작
+                if (!isDoorClosed()) {
+                    state = DOOR_OPENING;
+                    motor.forward(speedOpen);
+                }
+                break;
             default:
                 break;
         }
@@ -246,6 +266,44 @@ public:
     void setSpeed(int spOpen, int spClose) {
         speedOpen = spOpen;
         speedClose = spClose;
+    }
+};
+
+// 기타 제어 클래스
+class DeviceController {
+public:
+    static void init() {
+        pinMode(Pin::UV_LIGHT, OUTPUT);
+        pinMode(Pin::WATER_PUMP, OUTPUT);
+        pinMode(Pin::FAN1, OUTPUT);
+        pinMode(Pin::FAN2, OUTPUT);
+        
+        // 초기 상태: 모두 OFF
+        digitalWrite(Pin::UV_LIGHT, LOW);
+        digitalWrite(Pin::WATER_PUMP, LOW);
+        digitalWrite(Pin::FAN1, LOW);
+        digitalWrite(Pin::FAN2, LOW);
+    }
+    
+    static void setUV(bool on) {
+        digitalWrite(Pin::UV_LIGHT, on ? HIGH : LOW);
+    }
+    
+    static void setPump(bool on) {
+        digitalWrite(Pin::WATER_PUMP, on ? HIGH : LOW);
+    }
+    
+    static void setFan1(bool on) {
+        digitalWrite(Pin::FAN1, on ? HIGH : LOW);
+    }
+    
+    static void setFan2(bool on) {
+        digitalWrite(Pin::FAN2, on ? HIGH : LOW);
+    }
+    
+    static void setAllFans(bool on) {
+        setFan1(on);
+        setFan2(on);
     }
 };
 
@@ -308,6 +366,51 @@ void processCommand(char* cmd) {
             rs485.sendResponse(response);
         }
     }
+    else if (strcmp(command, "UV") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            DeviceController::setUV(on);
+            snprintf(response, sizeof(response), "%d:OK:UV_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
+    else if (strcmp(command, "PUMP") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            DeviceController::setPump(on);
+            snprintf(response, sizeof(response), "%d:OK:PUMP_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
+    else if (strcmp(command, "FAN") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            DeviceController::setAllFans(on);
+            snprintf(response, sizeof(response), "%d:OK:FAN_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
+    else if (strcmp(command, "FAN1") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            DeviceController::setFan1(on);
+            snprintf(response, sizeof(response), "%d:OK:FAN1_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
+    else if (strcmp(command, "FAN2") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            DeviceController::setFan2(on);
+            snprintf(response, sizeof(response), "%d:OK:FAN2_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
     else {
         snprintf(response, sizeof(response), "%d:ERROR:UNKNOWN_CMD\n", cmdID);
         rs485.sendResponse(response);
@@ -329,12 +432,10 @@ void setup() {
     // 시스템 초기화
     door.init();
     rs485.init(Defaults::BAUD_RATE);
+    DeviceController::init();
     
-    // 디버그용 시리얼 (선택사항)
+    // USB 시리얼 초기화 (웹 테스트용)
     Serial.begin(9600);
-    Serial.println("PETMON Door Control System - RS485");
-    Serial.print("Device ID: ");
-    Serial.println(Defaults::DEVICE_ID);
 }
 
 void loop() {
@@ -344,12 +445,13 @@ void loop() {
     // RS-485 명령 수신 및 처리
     static char cmdBuffer[64];
     if (rs485.readCommand(cmdBuffer, sizeof(cmdBuffer))) {
-        Serial.print("Received (RS485): "); // 디버그
+        // 디버깅: RS-485로 받은 명령을 USB로 출력
+        Serial.print("RS485_RX: ");
         Serial.println(cmdBuffer);
         processCommand(cmdBuffer);
     }
     
-    // USB 시리얼로도 명령 받기 (테스트용)
+    // USB 시리얼로도 명령 받기 (웹 테스트용 - 응답은 RS-485로도 전송)
     static char usbBuffer[64];
     static int usbIdx = 0;
     while (Serial.available()) {
@@ -357,8 +459,6 @@ void loop() {
         if (c == '\n' || c == '\r') {
             if (usbIdx > 0) {
                 usbBuffer[usbIdx] = '\0';
-                Serial.print("Received (USB): ");
-                Serial.println(usbBuffer);
                 processCommand(usbBuffer);
                 usbIdx = 0;
             }
