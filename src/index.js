@@ -1,58 +1,34 @@
-// 페트컵 제어 포트 (COM8 RS-485)
-let petcupPort = null;
-let petcupReader = null;
-let petcupWriter = null;
+// ========================================
+// PETMON 자동 분류 시스템
+// ========================================
 
-// 레이더 센서 포트 (COM9)
-let radarPort = null;
-let radarReader = null;
-let radarWriter = null;
+// 메인 컨트롤러 포트 (RS-485)
+// VID_0403+PID_6001+A5069RR4A\0000
+let mainPort = null;
+let mainReader = null;
+let mainWriter = null;
 
-// XL430 서보 모터 포트 (COM5)
+// 서보 모터 포트 (Dynamixel)
+// VID_0403+PID_6001+AL01QFACA\0000
 let servoPort = null;
 let servoReader = null;
 let servoWriter = null;
 
-// ========================================
-// Modbus RTU CRC16 계산 (레이더 센서용)
-// ========================================
-
-function calculateModbusCRC16(buffer) {
-    let crc = 0xffff;
-    for (let pos = 0; pos < buffer.length; pos++) {
-        crc ^= buffer[pos];
-        for (let i = 8; i !== 0; i--) {
-            if ((crc & 0x0001) !== 0) {
-                crc >>= 1;
-                crc ^= 0xa001;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    // Swap bytes
-    crc = ((crc & 0x00ff) << 8) | ((crc & 0xff00) >> 8);
-    return crc;
-}
+// 시스템 상태
+let isProcessing = false;
+let processStep = 0;
+let waitingForConfirmation = false;
+let totalSteps = 10;
 
 // ========================================
 // Dynamixel Protocol 2.0 구현
 // ========================================
 
-// Dynamixel ID는 HTML input에서 가져옴
-function getDxlId() {
-    return parseInt(document.getElementById('dxlId').value) || 1;
-}
-
 // Control Table 주소 (XL430-W250)
 const ADDR_TORQUE_ENABLE = 64;
 const ADDR_GOAL_POSITION = 116;
-const ADDR_PRESENT_POSITION = 132;
-const ADDR_MOVING = 122;
 
 // 명령어
-const INST_PING = 0x01;
-const INST_READ = 0x02;
 const INST_WRITE = 0x03;
 
 // CRC 계산 함수
@@ -134,59 +110,94 @@ function buildPositionPacket(id, position) {
 }
 
 // ========================================
-// 페트컵 제어 (COM8 RS-485)
+// 포트 연결 함수
 // ========================================
 
-async function connectPetcup() {
+async function connectMainController() {
     try {
-        petcupPort = await navigator.serial.requestPort();
-        await petcupPort.open({ baudRate: 9600 });
+        // VID_0403+PID_6001+A5069RR4A\0000로 필터링
+        const ports = await navigator.serial.getPorts();
+        let targetPort = null;
+
+        for (const port of ports) {
+            const info = port.getInfo();
+            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
+                // Serial Number 확인하려면 추가 로직 필요
+                // 일단 첫 번째 매칭되는 포트 사용
+                targetPort = port;
+                break;
+            }
+        }
+
+        if (!targetPort) {
+            // 포트가 없으면 사용자에게 선택 요청
+            targetPort = await navigator.serial.requestPort({
+                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+            });
+        }
+
+        mainPort = targetPort;
+        await mainPort.open({ baudRate: 9600 });
 
         const textDecoder = new TextDecoderStream();
-        const readableStreamClosed = petcupPort.readable.pipeTo(textDecoder.writable);
-        petcupReader = textDecoder.readable.getReader();
-        petcupWriter = petcupPort.writable.getWriter();
+        mainPort.readable.pipeTo(textDecoder.writable);
+        mainReader = textDecoder.readable.getReader();
+        mainWriter = mainPort.writable.getWriter();
 
-        document.getElementById('connectPetcupBtn').disabled = true;
-        document.getElementById('disconnectPetcupBtn').disabled = false;
-        document.getElementById('petcupStatus').textContent = '연결됨';
-        log('[페트컵] 포트 연결 성공');
+        log('[메인] RS-485 컨트롤러 연결 성공 (9600 baud)');
 
-        readPetcupData();
+        readMainData();
+        return true;
     } catch (error) {
-        log('[페트컵] 연결 실패: ' + error.message);
+        log('[메인] 연결 실패: ' + error.message);
+        return false;
     }
 }
 
-async function disconnectPetcup() {
+async function connectServoController() {
     try {
-        if (petcupReader) {
-            await petcupReader.cancel();
-            petcupReader = null;
-        }
-        if (petcupWriter) {
-            await petcupWriter.close();
-            petcupWriter = null;
-        }
-        if (petcupPort) {
-            await petcupPort.close();
-            petcupPort = null;
+        // VID_0403+PID_6001+AL01QFACA\0000로 필터링
+        const ports = await navigator.serial.getPorts();
+        let targetPort = null;
+
+        for (const port of ports) {
+            const info = port.getInfo();
+            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
+                // Main과 다른 포트 찾기
+                if (port !== mainPort) {
+                    targetPort = port;
+                    break;
+                }
+            }
         }
 
-        document.getElementById('connectPetcupBtn').disabled = false;
-        document.getElementById('disconnectPetcupBtn').disabled = true;
-        document.getElementById('petcupStatus').textContent = '연결 안 됨';
-        log('[페트컵] 포트 연결 해제');
+        if (!targetPort) {
+            targetPort = await navigator.serial.requestPort({
+                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+            });
+        }
+
+        servoPort = targetPort;
+        await servoPort.open({ baudRate: 57600 });
+
+        servoReader = servoPort.readable.getReader();
+        servoWriter = servoPort.writable.getWriter();
+
+        log('[서보] Dynamixel 컨트롤러 연결 성공 (57600 baud)');
+
+        readServoData();
+        return true;
     } catch (error) {
-        log('[페트컵] 연결 해제 실패: ' + error.message);
+        log('[서보] 연결 실패: ' + error.message);
+        return false;
     }
 }
 
-async function readPetcupData() {
+async function readMainData() {
     let buffer = '';
     try {
         while (true) {
-            const { value, done } = await petcupReader.read();
+            const { value, done } = await mainReader.read();
             if (done) break;
 
             buffer += value;
@@ -194,285 +205,13 @@ async function readPetcupData() {
             while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
                 const line = buffer.substring(0, newlineIndex).trim();
                 if (line.length > 0) {
-                    log('[페트컵] ' + line);
+                    log('[메인] ' + line);
                 }
                 buffer = buffer.substring(newlineIndex + 1);
             }
         }
     } catch (error) {
-        log('[페트컵] 수신 오류: ' + error.message);
-    }
-}
-
-async function writeToPetcup(data) {
-    if (!petcupWriter) {
-        log('[페트컵] 포트가 연결되지 않았습니다.');
-        return;
-    }
-    try {
-        const encoder = new TextEncoder();
-        const encodedData = encoder.encode(data + '\n');
-        await petcupWriter.write(encodedData);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-    } catch (error) {
-        log('[페트컵] 전송 오류: ' + error.message);
-    }
-}
-
-// ========================================
-// 레이더 센서 제어 (COM9 - Modbus RTU)
-// ========================================
-
-let radarMonitoring = false; // 연속 모니터링 플래그
-
-async function connectRadar() {
-    try {
-        radarPort = await navigator.serial.requestPort();
-        // DFRobot SEN0591: 기본 보드레이트 115200
-        await radarPort.open({ baudRate: 115200 });
-
-        // 바이너리 통신을 위한 Raw 스트림 사용
-        radarReader = radarPort.readable.getReader();
-        radarWriter = radarPort.writable.getWriter();
-
-        document.getElementById('connectRadarBtn').disabled = true;
-        document.getElementById('disconnectRadarBtn').disabled = false;
-        document.getElementById('radarStatus').textContent = '연결됨';
-        log('[레이더] DFRobot SEN0591 연결 성공 (115200 baud)');
-        log('[레이더] 자동 수신 데이터 모니터링 시작...');
-
-        // 백그라운드로 연속 데이터 수신 시작
-        radarMonitoring = true;
-        monitorRadarData();
-    } catch (error) {
-        log('[레이더] 연결 실패: ' + error.message);
-    }
-}
-
-async function disconnectRadar() {
-    try {
-        radarMonitoring = false; // 모니터링 중지
-
-        if (radarReader) {
-            await radarReader.cancel();
-            radarReader = null;
-        }
-        if (radarWriter) {
-            await radarWriter.close();
-            radarWriter = null;
-        }
-        if (radarPort) {
-            await radarPort.close();
-            radarPort = null;
-        }
-
-        document.getElementById('connectRadarBtn').disabled = false;
-        document.getElementById('disconnectRadarBtn').disabled = true;
-        document.getElementById('radarStatus').textContent = '연결 안 됨';
-        log('[레이더] 포트 연결 해제');
-    } catch (error) {
-        log('[레이더] 연결 해제 실패: ' + error.message);
-    }
-}
-
-// 레이더 센서 자동 수신 모니터링 (연속 모드)
-async function monitorRadarData() {
-    log('[레이더] 연속 모니터링 시작 - 센서가 보내는 모든 데이터 출력');
-
-    try {
-        while (radarMonitoring && radarReader) {
-            const { value, done } = await Promise.race([
-                radarReader.read(),
-                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false, timeout: true }), 2000)),
-            ]);
-
-            if (!radarMonitoring) break;
-            if (done) {
-                log('[레이더] 연결 종료');
-                break;
-            }
-
-            if (value && value.length > 0) {
-                const hexString = Array.from(value)
-                    .map((b) => '0x' + b.toString(16).padStart(2, '0'))
-                    .join(' ');
-                log(`[레이더 수신] ${value.length}바이트: ${hexString}`);
-
-                // 간단한 자동 파싱 시도 (패킷이 충분하면)
-                if (value.length >= 7 && value[0] === 0x01 && value[1] === 0x03 && value[2] === 0x02) {
-                    const distance = value[3] * 256 + value[4];
-                    log(`[레이더 자동파싱] 거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`);
-                    document.getElementById('radarData').textContent =
-                        `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
-                }
-            }
-
-            // CPU 부하 방지
-            await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-    } catch (error) {
-        log('[레이더] 모니터링 오류: ' + error.message);
-    }
-}
-
-async function readRadarDistance() {
-    if (!radarReader || !radarWriter) {
-        log('[레이더] 포트가 연결되지 않았습니다.');
-        return null;
-    }
-
-    try {
-        // Modbus RTU 명령: {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36}
-        const command = new Uint8Array([0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36]);
-
-        // 아두이노 코드처럼: 명령 전송
-        await radarWriter.write(command);
-        log('[레이더] 거리 측정 명령 전송');
-
-        // 명령 전송 후 대기 (아두이노: delay(10))
-        await new Promise((resolve) => setTimeout(resolve, 20));
-
-        // 응답 읽기 (아두이노의 readN 함수와 유사하게)
-        const responseData = new Uint8Array(7); // [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
-        let offset = 0;
-        const startTime = Date.now();
-        const timeout = 500; // 아두이노와 동일하게 500ms
-
-        while (offset < 7) {
-            const remainingTime = timeout - (Date.now() - startTime);
-            if (remainingTime <= 0) {
-                log('[레이더] 응답 타임아웃 (500ms 초과)');
-                break;
-            }
-
-            // Promise.race로 read()와 타임아웃을 경쟁시킴
-            const result = await Promise.race([
-                radarReader.read(),
-                new Promise((resolve) =>
-                    setTimeout(() => resolve({ value: null, done: false, timeout: true }), remainingTime),
-                ),
-            ]);
-
-            if (result.timeout) {
-                log('[레이더] 응답 없음 (타임아웃)');
-                break;
-            }
-
-            if (result.done) {
-                log('[레이더] 연결이 종료되었습니다.');
-                break;
-            }
-
-            if (result.value && result.value.length > 0) {
-                log(
-                    `[레이더] 수신: ${result.value.length} 바이트 - ${Array.from(result.value)
-                        .map((b) => '0x' + b.toString(16).padStart(2, '0'))
-                        .join(' ')}`,
-                );
-
-                // 받은 데이터를 responseData에 복사
-                const bytesToCopy = Math.min(result.value.length, 7 - offset);
-                responseData.set(result.value.slice(0, bytesToCopy), offset);
-                offset += bytesToCopy;
-
-                // 7바이트 모두 받았으면 파싱
-                if (offset >= 7) {
-                    log(
-                        `[레이더] 완전한 패킷 수신: ${Array.from(responseData)
-                            .map((b) => '0x' + b.toString(16).padStart(2, '0'))
-                            .join(' ')}`,
-                    );
-
-                    // 응답 패킷 구조 확인: [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
-                    if (responseData[0] === 0x01 && responseData[1] === 0x03 && responseData[2] === 0x02) {
-                        // CRC 검증 (아두이노: Data[5] * 256 + Data[6])
-                        const receivedCRC = responseData[5] * 256 + responseData[6];
-                        const calculatedCRC = calculateModbusCRC16(responseData.slice(0, 5));
-
-                        if (receivedCRC === calculatedCRC) {
-                            // 거리 계산 (아두이노: Data[3] * 256 + Data[4])
-                            const distance = responseData[3] * 256 + responseData[4];
-                            log(`[레이더] 거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`);
-                            document.getElementById('radarData').textContent =
-                                `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
-                            return distance;
-                        } else {
-                            log(
-                                `[레이더] CRC 오류: 수신=0x${receivedCRC.toString(16)}, 계산=0x${calculatedCRC.toString(16)}`,
-                            );
-                        }
-                    } else {
-                        log(
-                            `[레이더] 잘못된 패킷 헤더: ${Array.from(responseData.slice(0, 3))
-                                .map((b) => '0x' + b.toString(16).padStart(2, '0'))
-                                .join(' ')}`,
-                        );
-                    }
-                    break;
-                }
-            }
-        }
-
-        if (offset === 0) {
-            log('[레이더] 응답 없음 (타임아웃) - 센서 연결 및 전원을 확인하세요');
-        } else if (offset < 7) {
-            log(`[레이더] 불완전한 응답: ${offset}/7 바이트 수신`);
-        }
-
-        return null;
-    } catch (error) {
-        log('[레이더] 수신 오류: ' + error.message);
-        return null;
-    }
-}
-
-// 레이더 센서는 이제 readRadarDistance() 함수로 직접 측정
-
-// ========================================
-// XL430 서보 모터 제어 (COM5)
-// ========================================
-
-async function connectServo() {
-    try {
-        servoPort = await navigator.serial.requestPort();
-        await servoPort.open({ baudRate: 57600 }); // Dynamixel 기본 보드레이트
-
-        // Dynamixel은 바이너리 통신이므로 Raw 스트림 사용
-        servoReader = servoPort.readable.getReader();
-        servoWriter = servoPort.writable.getWriter();
-
-        document.getElementById('connectServoBtn').disabled = true;
-        document.getElementById('disconnectServoBtn').disabled = false;
-        document.getElementById('servoStatus').textContent = '연결됨';
-        log('[서보] XL430 연결 성공 (Dynamixel Protocol 2.0, 57600 baud)');
-
-        readServoData();
-    } catch (error) {
-        log('[서보] 연결 실패: ' + error.message);
-    }
-}
-
-async function disconnectServo() {
-    try {
-        if (servoReader) {
-            await servoReader.cancel();
-            servoReader = null;
-        }
-        if (servoWriter) {
-            await servoWriter.close();
-            servoWriter = null;
-        }
-        if (servoPort) {
-            await servoPort.close();
-            servoPort = null;
-        }
-
-        document.getElementById('connectServoBtn').disabled = false;
-        document.getElementById('disconnectServoBtn').disabled = true;
-        document.getElementById('servoStatus').textContent = '연결 안 됨';
-        log('[서보] 포트 연결 해제');
-    } catch (error) {
-        log('[서보] 연결 해제 실패: ' + error.message);
+        log('[메인] 수신 오류: ' + error.message);
     }
 }
 
@@ -481,152 +220,128 @@ async function readServoData() {
         while (true) {
             const { value, done } = await servoReader.read();
             if (done) break;
-
-            // Dynamixel 응답 패킷 파싱 (간단한 버전)
-            // 실제로는 헤더 확인, CRC 검증 등이 필요하지만 여기서는 생략
-            if (value && value.length >= 11) {
-                // Status Packet: [0xFF 0xFF 0xFD 0x00 ID LEN_L LEN_H INST ERR PARAM... CRC_L CRC_H]
-                const header = `${value[0].toString(16)} ${value[1].toString(16)} ${value[2].toString(16)}`;
-                const id = value[4];
-                const error = value[8];
-
-                if (error === 0) {
-                    log(`[서보] 응답: ID=${id}, 성공`);
-                    document.getElementById('servoData').textContent = `서보 ID ${id}: 명령 성공`;
-                } else {
-                    log(`[서보] 응답: ID=${id}, 에러=${error}`);
-                    document.getElementById('servoData').textContent = `서보 ID ${id}: 에러 ${error}`;
-                }
-            }
+            // 서보 응답 처리 (필요시)
         }
     } catch (error) {
         log('[서보] 수신 오류: ' + error.message);
     }
 }
 
-async function writeToServo(packetArray) {
+// ========================================
+// 명령 전송 함수
+// ========================================
+
+async function sendMainCommand(cmd) {
+    if (!mainWriter) {
+        log('[메인] 포트가 연결되지 않았습니다.');
+        return false;
+    }
+    try {
+        const encoder = new TextEncoder();
+        const command = `1:${cmd}`;
+        const encodedData = encoder.encode(command + '\n');
+        await mainWriter.write(encodedData);
+        log(`[전송] ${command}`);
+        await delay(100);
+        return true;
+    } catch (error) {
+        log('[메인] 전송 오류: ' + error.message);
+        return false;
+    }
+}
+
+async function sendServoCommand(packetArray) {
     if (!servoWriter) {
         log('[서보] 포트가 연결되지 않았습니다.');
-        return;
+        return false;
     }
     try {
         await servoWriter.write(packetArray);
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await delay(100);
+        return true;
     } catch (error) {
         log('[서보] 전송 오류: ' + error.message);
+        return false;
     }
 }
 
 // ========================================
-// 명령 함수
+// 서보 모터 제어 함수
 // ========================================
 
-function sendCommand(cmd) {
-    const deviceId = document.getElementById('deviceId').value;
-    const command = `${deviceId}:${cmd}`;
-    displayCommand(command);
-    log(`[전송] ${command}`);
-    writeToPetcup(command);
-}
-
-function setSpeed() {
-    const deviceId = document.getElementById('deviceId').value;
-    const speedOpen = document.getElementById('speedOpen').value;
-    const speedClose = document.getElementById('speedClose').value;
-    const command = `${deviceId}:SETSPEED:${speedOpen}:${speedClose}`;
-    displayCommand(command);
-    log(`[전송] ${command}`);
-    writeToPetcup(command);
-}
-
-// 레이더 명령
-async function requestRadarData() {
-    // 연속 모니터링 중에는 명령 모드로 전환
-    if (radarMonitoring) {
-        log('[레이더] 연속 모니터링 중... 명령 전송 모드는 연결 해제 후 재연결 필요');
-        return;
-    }
-    await readRadarDistance();
-}
-
-// XL430 서보 명령 (ID 2)
-function moveForward() {
-    const id = 2;
-    const angle = 268.3;
-    // 각도를 위치값으로 변환 (0-360° → 0-4095)
-    const position = Math.round((angle / 360) * 4095);
-    const packet = buildPositionPacket(id, position);
-    log(`[서보] ID ${id} 앞으로 이동: ${angle}° → 위치 ${position}`);
-    writeToServo(packet);
-    document.getElementById('servoData').textContent = `서보: 앞으로 (${angle}°)`;
-}
-
-function moveBackward() {
-    const id = 2;
-    const angle = 323;
-    // 각도를 위치값으로 변환 (0-360° → 0-4095)
-    const position = Math.round((angle / 360) * 4095);
-    const packet = buildPositionPacket(id, position);
-    log(`[서보] ID ${id} 뒤로 이동: ${angle}° → 위치 ${position}`);
-    writeToServo(packet);
-    document.getElementById('servoData').textContent = `서보: 뒤로 (${angle}°)`;
-}
-
-// 그리퍼 명령 (ID 1)
-function openGripper() {
-    const id = 1;
-    const angle = 160;
-    const position = Math.round((angle / 360) * 4095);
-    const packet = buildPositionPacket(id, position);
-    log(`[그리퍼] ID ${id} 열기: ${angle}° → 위치 ${position}`);
-    writeToServo(packet);
-    document.getElementById('gripperData').textContent = `그리퍼: 열기 (${angle}°)`;
-}
-
-function closeGripper() {
-    const id = 1;
-    const angle = 184;
-    const position = Math.round((angle / 360) * 4095);
-    const packet = buildPositionPacket(id, position);
-    log(`[그리퍼] ID ${id} 닫기: ${angle}° → 위치 ${position}`);
-    writeToServo(packet);
-    document.getElementById('gripperData').textContent = `그리퍼: 닫기 (${angle}°) - 물체 감지 시 자동 정지`;
-}
-
-function enableGripper() {
-    const id = 1;
-    const packet = buildTorquePacket(id, true);
-    log(`[그리퍼] ID ${id} 토크 활성화`);
-    writeToServo(packet);
-    document.getElementById('gripperData').textContent = `그리퍼 ID ${id}: 토크 ON`;
-}
-
-function disableGripper() {
-    const id = 1;
-    const packet = buildTorquePacket(id, false);
-    log(`[그리퍼] ID ${id} 토크 비활성화`);
-    writeToServo(packet);
-    document.getElementById('gripperData').textContent = `그리퍼 ID ${id}: 토크 OFF`;
-}
-
-function enableServo() {
-    const id = 2;
+async function enableTorque(id) {
     const packet = buildTorquePacket(id, true);
     log(`[서보] ID ${id} 토크 활성화`);
-    writeToServo(packet);
-    document.getElementById('servoData').textContent = `서보 ID ${id}: 토크 ON`;
+    return await sendServoCommand(packet);
 }
 
-function disableServo() {
+async function moveGripper(open) {
+    const id = 1;
+    const angle = open ? 160 : 184;
+    const position = Math.round((angle / 360) * 4095);
+    const packet = buildPositionPacket(id, position);
+    log(`[그리퍼] ${open ? '열기' : '닫기'}: ${angle}° → 위치 ${position}`);
+    return await sendServoCommand(packet);
+}
+
+async function moveServo(forward) {
     const id = 2;
-    const packet = buildTorquePacket(id, false);
-    log(`[서보] ID ${id} 토크 비활성화`);
-    writeToServo(packet);
-    document.getElementById('servoData').textContent = `서보 ID ${id}: 토크 OFF`;
+    const angle = forward ? 268.3 : 323;
+    const position = Math.round((angle / 360) * 4095);
+    const packet = buildPositionPacket(id, position);
+    log(`[서보] ${forward ? '앞으로' : '뒤로'} 이동: ${angle}° → 위치 ${position}`);
+    return await sendServoCommand(packet);
 }
 
-function displayCommand(cmd) {
-    document.getElementById('commandOutput').textContent = cmd;
+// ========================================
+// UI 업데이트 함수
+// ========================================
+
+function updateDateTime() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('ko-KR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'long',
+    });
+    const timeStr = now.toLocaleTimeString('ko-KR');
+    document.getElementById('datetime').textContent = `${dateStr} ${timeStr}`;
+}
+
+setInterval(updateDateTime, 1000);
+updateDateTime();
+
+function showProcessScreen() {
+    document.getElementById('mainScreen').style.display = 'none';
+    document.getElementById('processScreen').classList.add('active');
+    document.getElementById('emergencyBtn').style.display = 'block';
+}
+
+function hideProcessScreen() {
+    document.getElementById('mainScreen').style.display = 'block';
+    document.getElementById('processScreen').classList.remove('active');
+    document.getElementById('emergencyBtn').style.display = 'none';
+}
+
+function updateProcessStep(step, icon, title, description) {
+    document.getElementById('processIcon').textContent = icon;
+    document.getElementById('processTitle').textContent = title;
+    document.getElementById('processDescription').textContent = description;
+    document.getElementById('processProgress').textContent = `${step} / ${totalSteps}`;
+}
+
+function showConfirmButton() {
+    document.getElementById('confirmButton').style.display = 'block';
+}
+
+function hideConfirmButton() {
+    document.getElementById('confirmButton').style.display = 'none';
+}
+
+function toggleLog() {
+    const logPopup = document.getElementById('logPopup');
+    logPopup.classList.toggle('active');
 }
 
 function log(message) {
@@ -640,27 +355,216 @@ function clearLog() {
     document.getElementById('log').value = '';
 }
 
-// 초기 메시지
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ========================================
+// 시스템 초기화
+// ========================================
+
+async function initializeSystem() {
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log('PETMON 시스템 초기화 시작');
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    const systemBox = document.getElementById('systemBox');
+    const systemStatusText = document.getElementById('systemStatusText');
+    systemStatusText.textContent = '초기화 중...';
+    systemBox.classList.add('disabled');
+
+    // 메인 컨트롤러 연결
+    log('📦 메인 컨트롤러 연결 중...');
+    const mainConnected = await connectMainController();
+    if (!mainConnected) {
+        log('❌ 메인 컨트롤러 연결 실패');
+        systemStatusText.textContent = '연결 실패';
+        return;
+    }
+
+    await delay(500);
+
+    // 서보 컨트롤러 연결
+    log('🤖 서보 컨트롤러 연결 중...');
+    const servoConnected = await connectServoController();
+    if (!servoConnected) {
+        log('❌ 서보 컨트롤러 연결 실패');
+        systemStatusText.textContent = '연결 실패';
+        return;
+    }
+
+    await delay(500);
+
+    // 서보 모터 토크 활성화
+    log('⚙️ 서보 모터 초기화 중...');
+    await enableTorque(1); // 그리퍼
+    await delay(300);
+    await enableTorque(2); // 메인 서보
+    await delay(300);
+
+    log('✅ 시스템 초기화 완료');
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    systemStatusText.textContent = '준비 완료';
+    systemBox.classList.remove('disabled');
+    document.getElementById('startButton').disabled = false;
+}
+
+// ========================================
+// 자동 프로세스
+// ========================================
+
+async function startProcess() {
+    if (isProcessing) {
+        log('⚠️ 프로세스가 이미 실행 중입니다.');
+        return;
+    }
+
+    isProcessing = true;
+    processStep = 0;
+
+    showProcessScreen();
+
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log('🚀 자동 프로세스 시작');
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    try {
+        // 1단계: 투입구 열림
+        processStep = 1;
+        updateProcessStep(processStep, '🚪', '투입구 열기', '문이 열리고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 투입구 열기...`);
+        await sendMainCommand('OPEN');
+        await delay(3000);
+
+        // 2단계: 그리퍼 열림
+        processStep = 2;
+        updateProcessStep(processStep, '🤏', '그리퍼 준비', '그리퍼가 펼쳐지고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 그리퍼 열기...`);
+        await moveGripper(true);
+        await delay(1500);
+
+        // 3단계: 투입 완료 대기
+        processStep = 3;
+        updateProcessStep(processStep, '📦', 'PET병 투입', 'PET병을 투입구에 넣어주세요');
+        log(`[${processStep}/${totalSteps}] 투입 완료 대기 중...`);
+        showConfirmButton();
+        waitingForConfirmation = true;
+    } catch (error) {
+        log('❌ 프로세스 실행 중 오류: ' + error.message);
+        stopProcess();
+    }
+}
+
+async function confirmInsertion() {
+    if (!waitingForConfirmation) return;
+
+    waitingForConfirmation = false;
+    hideConfirmButton();
+
+    try {
+        // 4단계: 그리퍼 닫기
+        processStep = 4;
+        updateProcessStep(processStep, '✊', '파지', 'PET병을 잡고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 그리퍼 닫기...`);
+        await moveGripper(false);
+        await delay(1500);
+
+        // 5단계: 문 닫기
+        processStep = 5;
+        updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 투입구 닫기...`);
+        await sendMainCommand('CLOSE');
+        await delay(3000);
+
+        // 6단계: 물 3초 분사
+        processStep = 6;
+        updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
+        await sendMainCommand('PUMP:ON');
+        await delay(3000);
+        await sendMainCommand('PUMP:OFF');
+        log('물 분사 완료');
+
+        // 7단계: 서보 모터 뒤로 이동
+        processStep = 7;
+        updateProcessStep(processStep, '🔄', '이동 중', '배출 위치로 이동하고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 서보 모터 뒤로 이동...`);
+        await moveServo(false);
+        await delay(2000);
+
+        // 8단계: 그리퍼 열고 2초 대기
+        processStep = 8;
+        updateProcessStep(processStep, '📤', '배출 중', 'PET병을 배출하고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 그리퍼 열기 (배출)...`);
+        await moveGripper(true);
+        await delay(2000);
+
+        // 9단계: 그리퍼 닫기
+        processStep = 9;
+        updateProcessStep(processStep, '✊', '정리 중', '그리퍼를 닫고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 그리퍼 닫기...`);
+        await moveGripper(false);
+        await delay(1500);
+
+        // 10단계: 서보 모터 앞으로 (초기 위치)
+        processStep = 10;
+        updateProcessStep(processStep, '🏠', '복귀 중', '초기 위치로 돌아가고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 서보 모터 앞으로 이동...`);
+        await moveServo(true);
+        await delay(2000);
+
+        // 프로세스 완료
+        updateProcessStep(10, '✅', '완료!', '감사합니다. 포인트가 적립되었습니다.');
+        log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        log('✅ 프로세스 완료!');
+        log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        await delay(3000);
+        isProcessing = false;
+        hideProcessScreen();
+        document.getElementById('startButton').disabled = false;
+    } catch (error) {
+        log('❌ 프로세스 실행 중 오류: ' + error.message);
+        stopProcess();
+    }
+}
+
+function emergencyStop() {
+    if (!confirm('긴급 정지하시겠습니까?')) {
+        return;
+    }
+
+    log('⚠️ 긴급 정지!');
+    isProcessing = false;
+    waitingForConfirmation = false;
+    processStep = 0;
+
+    hideProcessScreen();
+    hideConfirmButton();
+    document.getElementById('startButton').disabled = false;
+
+    // 긴급 정지: 모든 모터 정지
+    if (mainWriter) {
+        sendMainCommand('STOP');
+        sendMainCommand('PUMP:OFF');
+    }
+}
+
+// ========================================
+// 초기 로그
+// ========================================
+
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log('페트컵 통합 제어 시스템 v2.0');
+log('PETMON 자동 분류 시스템 v3.0');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log('');
-log('📡 포트 연결 정보:');
-log('  - 페트컵 제어: COM8 (RS-485, 9600 baud)');
-log('  - 레이더 센서: COM9 (DFRobot SEN0591, 115200 baud)');
-log('  - XL430 서보: COM5 (Dynamixel Protocol 2.0, 57600 baud)');
-log('');
-log('💡 사용 방법:');
-log('  1. 각 포트를 순서대로 연결하세요');
-log('  2. 레이더 센서: 연결 시 자동으로 수신 데이터 모니터링');
-log('  3. XL430 사용 전 먼저 "토크 ON" 버튼 클릭');
-log('  4. 서보 ID가 1이 아닌 경우 Dynamixel ID 변경');
-log('');
-log('🔧 명령 형식 (페트컵): <ID>:<CMD>:<PARAM>');
+log('💡 관리자: 좌측 하단 "시스템 연결" 버튼 클릭');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 // Web Serial API 지원 확인
 if (!('serial' in navigator)) {
     log('⚠️ 경고: 이 브라우저는 Web Serial API를 지원하지 않습니다.');
     log('Chrome 또는 Edge 브라우저를 사용하세요.');
+    document.getElementById('operationStatus').textContent = '지원 안됨';
+    document.getElementById('operationStatus').style.color = '#e74c3c';
 }
