@@ -54,6 +54,8 @@
 
     // Inverter (MC12B, FA-50)
     constexpr int INVERTER_ENABLE = 51;
+    constexpr int INVERTER_FWD = 40;  // FA-50 Forward Signal
+    constexpr int INVERTER_REV = 39;  // FA-50 Reverse Signal
  }
 
  namespace EEPROM_Addr {
@@ -188,12 +190,31 @@ public:
     int getDeviceID() { return deviceID; }
 };
 
+// 디버그 로그 헬퍼 함수 (Serial + Serial3)
+void debugLog(const char* msg) {
+    Serial.println(msg);
+    // RS-485로도 전송
+    digitalWrite(Pin::RS485_DE, HIGH);
+    digitalWrite(Pin::RS485_RE, HIGH);
+    delayMicroseconds(100);
+    Serial3.println(msg);
+    Serial3.flush();
+    delay(10);
+    digitalWrite(Pin::RS485_DE, LOW);
+    digitalWrite(Pin::RS485_RE, LOW);
+    delayMicroseconds(100);
+}
+
 // 인버터 제어 클래스 (MC12B, FA-50)
 class InverterController {
 public:
     static void init() {
         pinMode(Pin::INVERTER_ENABLE, OUTPUT);
+        pinMode(Pin::INVERTER_FWD, OUTPUT);
+        pinMode(Pin::INVERTER_REV, OUTPUT);
         digitalWrite(Pin::INVERTER_ENABLE, LOW);
+        digitalWrite(Pin::INVERTER_FWD, LOW);
+        digitalWrite(Pin::INVERTER_REV, LOW);
     }
     
     static void enable() {
@@ -210,6 +231,26 @@ public:
     
     static void off() {
         digitalWrite(Pin::INVERTER_ENABLE, LOW);
+    }
+    
+    static void setFwd(bool state) {
+        if (state) {
+            digitalWrite(Pin::INVERTER_FWD, HIGH);
+            debugLog("⚡ FA-50 FWD ON (Pin 40 = HIGH)");
+        } else {
+            digitalWrite(Pin::INVERTER_FWD, LOW);
+            debugLog("⚡ FA-50 FWD OFF (Pin 40 = LOW)");
+        }
+    }
+    
+    static void setRev(bool state) {
+        if (state) {
+            digitalWrite(Pin::INVERTER_REV, HIGH);
+            debugLog("🔄 FA-50 REV ON (Pin 39 = HIGH)");
+        } else {
+            digitalWrite(Pin::INVERTER_REV, LOW);
+            debugLog("🔄 FA-50 REV OFF (Pin 39 = LOW)");
+        }
     }
 };
 
@@ -280,8 +321,12 @@ public:
                 if (isDoorClosed()) {
                     motor.stop();
                     state = DOOR_CLOSED;
-                    // 문이 닫히면 인버터(MC12B) 켜기
+                    debugLog("✅ Door CLOSED (sensor detected)");
+                    // 문이 닫히면 인버터(MC12B) 켜고 FWD 신호 전송
+                    debugLog("🔌 MC12B ON (Pin 51 = HIGH)");
                     InverterController::enable();
+                    delay(50); // 안정화 대기
+                    InverterController::setFwd(true);
                 }
                 break;
             case DOOR_OPEN:
@@ -389,6 +434,7 @@ void processCommand(char* cmd) {
         rs485.sendResponse(response);
     }
     else if (strcmp(command, "CLOSE") == 0) {
+        debugLog("🚪 Closing door...");
         door.closeDoor();
         snprintf(response, sizeof(response), "%d:OK:CLOSING\n", cmdID);
         rs485.sendResponse(response);
@@ -475,6 +521,24 @@ void processCommand(char* cmd) {
             rs485.sendResponse(response);
         }
     }
+    else if (strcmp(command, "FWD") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            InverterController::setFwd(on);
+            snprintf(response, sizeof(response), "%d:OK:FWD_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
+    else if (strcmp(command, "REV") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            InverterController::setRev(on);
+            snprintf(response, sizeof(response), "%d:OK:REV_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
     else {
         snprintf(response, sizeof(response), "%d:ERROR:UNKNOWN_CMD\n", cmdID);
         rs485.sendResponse(response);
@@ -501,6 +565,13 @@ void setup() {
     
     // USB 시리얼 초기화 (웹 테스트용)
     Serial.begin(9600);
+    delay(100);
+    
+    // 초기화 완료 메시지
+    debugLog("━━━━━━━━━━━━━━━━━");
+    debugLog("PETCUP System Initialized");
+    debugLog("MC12B Inverter: Pin 51");
+    debugLog("━━━━━━━━━━━━━━━━━");
 }
 
 void loop() {
@@ -510,9 +581,10 @@ void loop() {
     // RS-485 명령 수신 및 처리
     static char cmdBuffer[64];
     if (rs485.readCommand(cmdBuffer, sizeof(cmdBuffer))) {
-        // 디버깅: RS-485로 받은 명령을 USB로 출력
-        Serial.print("RS485_RX: ");
-        Serial.println(cmdBuffer);
+        // 디버깅: 받은 명령 출력
+        char logMsg[80];
+        snprintf(logMsg, sizeof(logMsg), "📥 RX: %s", cmdBuffer);
+        debugLog(logMsg);
         
         // 명령 처리 전 대기
         delay(5);

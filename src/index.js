@@ -487,7 +487,7 @@ async function confirmInsertion() {
     try {
         // 4단계: 그리퍼 닫기
         processStep = 4;
-        updateProcessStep(processStep, '✊', '파지', 'PET병을 잡고 있습니다...');
+        updateProcessStep(processStep, '✊', '컵 잡기', '컵을 잡고 있습니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 닫기...`);
         await moveGripper(false);
         await delay(1500);
@@ -517,14 +517,14 @@ async function confirmInsertion() {
 
         // 8단계: 그리퍼 열고 2초 대기
         processStep = 8;
-        updateProcessStep(processStep, '📤', '배출 중', 'PET병을 배출하고 있습니다...');
+        updateProcessStep(processStep, '📤', '배출 중', '컵을 배출하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 열기 (배출)...`);
         await moveGripper(true);
         await delay(2000);
 
         // 9단계: 그리퍼 닫기
         processStep = 9;
-        updateProcessStep(processStep, '✊', '정리 중', '그리퍼를 닫고 있습니다...');
+        updateProcessStep(processStep, '🔄', '정리 중', '투입하신 컵을 정리중입니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 닫기...`);
         await moveGripper(false);
         await delay(1500);
@@ -542,10 +542,14 @@ async function confirmInsertion() {
         log('✅ 프로세스 완료!');
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-        // UV, FAN, 인버터 끄기
+        // UV, FAN, 인버터 끄기 (딜레이를 두고 순차적으로 전송)
         log('💡 UV 라이트, 팬, 인버터 정지...');
         await sendMainCommand('UV:OFF');
+        await delay(200);
         await sendMainCommand('FAN:OFF');
+        await delay(200);
+        await sendMainCommand('FWD:OFF');
+        await delay(200);
         await sendMainCommand('MC12B:OFF');
 
         await delay(3000);
@@ -558,7 +562,7 @@ async function confirmInsertion() {
     }
 }
 
-function emergencyStop() {
+async function emergencyStop() {
     if (!confirm('긴급 정지하시겠습니까?')) {
         return;
     }
@@ -572,13 +576,19 @@ function emergencyStop() {
     hideConfirmButton();
     document.getElementById('startButton').disabled = false;
 
-    // 긴급 정지: 모든 모터 및 장치 정지
+    // 긴급 정지: 모든 모터 및 장치 정지 (딜레이를 두고 순차적으로 전송)
     if (mainWriter) {
-        sendMainCommand('STOP');
-        sendMainCommand('PUMP:OFF');
-        sendMainCommand('UV:OFF');
-        sendMainCommand('FAN:OFF');
-        sendMainCommand('MC12B:OFF');
+        await sendMainCommand('STOP');
+        await delay(200);
+        await sendMainCommand('PUMP:OFF');
+        await delay(200);
+        await sendMainCommand('UV:OFF');
+        await delay(200);
+        await sendMainCommand('FAN:OFF');
+        await delay(200);
+        await sendMainCommand('FWD:OFF');
+        await delay(200);
+        await sendMainCommand('MC12B:OFF');
     }
 }
 
