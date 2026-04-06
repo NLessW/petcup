@@ -562,19 +562,14 @@ async function confirmInsertion() {
         await moveGripper(false);
         await delay(1500);
 
-        // 5단계: 문 닫기 (펌웨어가 자동으로 손 감지 처리)
+        // 5단계: 문 닫기 (펌웨어가 완전히 닫힐 때까지 blocking 후 응답)
         processStep = 5;
         updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
-        log(`[${processStep}/${totalSteps}] 투입구 닫기... (펌웨어가 손 감지 자동 처리)`);
-        await sendMainCommand('CLOSE');
+        log(`[${processStep}/${totalSteps}] 투입구 닫기... (손 감지 시 자동 재개방)`);
 
-        // 문이 완전히 닫힐 때까지 대기 (최대 30초)
-        const doorClosed = await waitForDoorClosed(30000);
-        if (!doorClosed) {
-            log('❌ 오류: 문이 닫히지 않았습니다. 프로세스를 중단합니다.');
-            await emergencyStop();
-            return;
-        }
+        // CLOSE 명령 - 펌웨어가 문이 완전히 닫힌 후 응답 전송
+        await sendMainCommand('CLOSE');
+        log('✅ 문이 완전히 닫혔습니다!');
 
         // 6단계: 물 분사
         processStep = 6;

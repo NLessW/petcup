@@ -470,9 +470,25 @@ void processCommand(char* cmd) {
         rs485.sendResponse(response);
     }
     else if (strcmp(command, "CLOSE") == 0) {
-        debugLog("🚪 Closing door...");
+        debugLog("🚪 Closing door... (will wait until fully closed)");
         door.closeDoor();
-        snprintf(response, sizeof(response), "%d:OK:CLOSING\n", cmdID);
+        
+        // 문이 완전히 닫힐 때까지 blocking 대기
+        unsigned long startTime = millis();
+        while (!door.isDoorClosed()) {
+            door.update(); // 손 감지 및 재개방 처리
+            delay(10);
+            
+            // 타임아웃 (최대 60초)
+            if (millis() - startTime > 60000) {
+                snprintf(response, sizeof(response), "%d:ERROR:CLOSE_TIMEOUT\n", cmdID);
+                rs485.sendResponse(response);
+                return;
+            }
+        }
+        
+        // 문이 완전히 닫힌 후 응답
+        snprintf(response, sizeof(response), "%d:OK:CLOSED\n", cmdID);
         rs485.sendResponse(response);
     }
     else if (strcmp(command, "STOP") == 0) {
