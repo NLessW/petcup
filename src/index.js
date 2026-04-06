@@ -527,32 +527,39 @@ async function confirmInsertion() {
         log(`[${processStep}/${totalSteps}] 투입구 닫기... (펌웨어가 손 감지 자동 처리)`);
         await sendMainCommand('CLOSE');
         await delay(5000); // 손 감지 재개방 시간 고려하여 5초 대기
+
+        // 6단계: 물 분사
+        processStep = 6;
+        updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
+        await sendMainCommand('PUMP:ON');
+        await delay(3000);
         await sendMainCommand('PUMP:OFF');
         log('물 분사 완료');
 
-        // 서보 모터 뒤로 이동
-        processStep = processStep + 1;
+        // 7단계: 서보 모터 뒤로 이동
+        processStep = 7;
         updateProcessStep(processStep, '🔄', '이동 중', '배출 위치로 이동하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 서보 모터 뒤로 이동...`);
         await moveServo(false);
         await delay(2000);
 
-        // 그리퍼 열고 배출
-        processStep = processStep + 1;
+        // 8단계: 그리퍼 열고 배출
+        processStep = 8;
         updateProcessStep(processStep, '📤', '배출 중', '컵을 배출하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 열기 (배출)...`);
         await moveGripper(true);
         await delay(2000);
 
-        // 그리퍼 닫기
-        processStep = processStep + 1;
+        // 9단계: 그리퍼 닫기
+        processStep = 9;
         updateProcessStep(processStep, '🔄', '정리 중', '투입하신 컵을 정리중입니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 닫기...`);
         await moveGripper(false);
         await delay(1500);
 
-        // 서보 모터 앞으로 (초기 위치)
-        processStep = processStep + 1;
+        // 10단계: 서보 모터 앞으로 (초기 위치)
+        processStep = 10;
         updateProcessStep(processStep, '🏠', '복귀 중', '초기 위치로 돌아가고 있습니다...');
         log(`[${processStep}/${totalSteps}] 서보 모터 앞으로 이동...`);
         await moveServo(true);
