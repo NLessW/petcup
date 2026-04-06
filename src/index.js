@@ -214,6 +214,13 @@ async function readMainData() {
                     } else if (line.includes('HAND:CLEAR')) {
                         lastHandResponse = 'CLEAR';
                     }
+                    // STATUS 응답 파싱
+                    if (line.includes('STATUS:')) {
+                        const statusMatch = line.match(/STATUS:(\w+)/);
+                        if (statusMatch) {
+                            lastDoorStatus = statusMatch[1];
+                        }
+                    }
                 }
                 buffer = buffer.substring(newlineIndex + 1);
             }
@@ -260,6 +267,7 @@ async function sendMainCommand(cmd) {
 
 // 손 감지 확인 함수
 let lastHandResponse = 'CLEAR';
+let lastDoorStatus = 'UNKNOWN';
 
 async function checkHandDetection() {
     if (!mainWriter) {
@@ -279,6 +287,39 @@ async function checkHandDetection() {
         log('[손감지] 확인 오류: ' + error.message);
         return false;
     }
+}
+
+// 문 상태 확인 함수
+async function waitForDoorClosed(timeoutMs = 30000) {
+    if (!mainWriter) {
+        log('[문상태] 포트가 연결되지 않았습니다.');
+        return false;
+    }
+
+    const startTime = Date.now();
+    log('🚪 문이 완전히 닫힐 때까지 대기 중...');
+
+    while (Date.now() - startTime < timeoutMs) {
+        try {
+            const encoder = new TextEncoder();
+            const command = '1:STATUS';
+            const encodedData = encoder.encode(command + '\n');
+            await mainWriter.write(encodedData);
+            await delay(500); // 응답 대기 및 체크 간격
+
+            if (lastDoorStatus === 'CLOSED') {
+                log('✅ 문이 완전히 닫혔습니다!');
+                return true;
+            } else {
+                log(`⏳ 문 상태: ${lastDoorStatus} - 계속 대기 중...`);
+            }
+        } catch (error) {
+            log('[문상태] 확인 오류: ' + error.message);
+        }
+    }
+
+    log('⚠️ 타임아웃: 문이 닫히지 않았습니다.');
+    return false;
 }
 
 async function sendServoCommand(packetArray) {
@@ -526,7 +567,14 @@ async function confirmInsertion() {
         updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
         log(`[${processStep}/${totalSteps}] 투입구 닫기... (펌웨어가 손 감지 자동 처리)`);
         await sendMainCommand('CLOSE');
-        await delay(5000); // 손 감지 재개방 시간 고려하여 5초 대기
+
+        // 문이 완전히 닫힐 때까지 대기 (최대 30초)
+        const doorClosed = await waitForDoorClosed(30000);
+        if (!doorClosed) {
+            log('❌ 오류: 문이 닫히지 않았습니다. 프로세스를 중단합니다.');
+            await emergencyStop();
+            return;
+        }
 
         // 6단계: 물 분사
         processStep = 6;
