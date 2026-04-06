@@ -257,6 +257,49 @@ public:
     }
 };
 
+// 기타 제어 클래스
+class DeviceController {
+public:
+    static void init() {
+        pinMode(Pin::UV_LIGHT, OUTPUT);
+        pinMode(Pin::WATER_PUMP, OUTPUT);
+        pinMode(Pin::FAN1, OUTPUT);
+        pinMode(Pin::FAN2, OUTPUT);
+        pinMode(Pin::SENSOR_HAND, INPUT); // 손 감지 센서 초기화
+        
+        // 초기 상태: 모두 OFF
+        digitalWrite(Pin::UV_LIGHT, LOW);
+        digitalWrite(Pin::WATER_PUMP, LOW);
+        digitalWrite(Pin::FAN1, LOW);
+        digitalWrite(Pin::FAN2, LOW);
+    }
+    
+    static void setUV(bool on) {
+        digitalWrite(Pin::UV_LIGHT, on ? HIGH : LOW);
+    }
+    
+    static void setPump(bool on) {
+        digitalWrite(Pin::WATER_PUMP, on ? HIGH : LOW);
+    }
+    
+    static void setFan1(bool on) {
+        digitalWrite(Pin::FAN1, on ? HIGH : LOW);
+    }
+    
+    static void setFan2(bool on) {
+        digitalWrite(Pin::FAN2, on ? HIGH : LOW);
+    }
+    
+    static void setAllFans(bool on) {
+        setFan1(on);
+        setFan2(on);
+    }
+    
+    static bool isHandDetected() {
+        return digitalRead(Pin::SENSOR_HAND) == HIGH;
+    }
+};
+
 // 문 제어 클래스
 class DoorController {
 private:
@@ -321,12 +364,31 @@ public:
                 }
                 break;
             case DOOR_CLOSING:
-                // 손 감지 시 즉시 재개방
+                // 손 감지 시 즉시 재개방 및 손 빠질 때까지 대기
                 if (DeviceController::isHandDetected()) {
                     debugLog("⚠️ HAND DETECTED! Reopening door...");
                     motor.stop();
-                    state = DOOR_OPENING;
                     motor.forward(speedOpen);
+                    
+                    // 문이 완전히 열릴 때까지 대기
+                    while (!isDoorOpen()) {
+                        delay(10);
+                    }
+                    motor.stop();
+                    debugLog("📂 Door reopened - waiting for hand removal");
+                    
+                    // 손이 빠질 때까지 대기
+                    while (DeviceController::isHandDetected()) {
+                        debugLog("✋ Hand still detected - please remove");
+                        delay(500);
+                    }
+                    
+                    debugLog("✅ Hand removed - closing door again");
+                    delay(1000); // 1초 추가 대기
+                    
+                    // 다시 닫기 시작
+                    state = DOOR_CLOSING;
+                    motor.backward(speedClose);
                     break;
                 }
                 
@@ -374,49 +436,6 @@ public:
     void setSpeed(int spOpen, int spClose) {
         speedOpen = spOpen;
         speedClose = spClose;
-    }
-};
-
-// 기타 제어 클래스
-class DeviceController {
-public:
-    static void init() {
-        pinMode(Pin::UV_LIGHT, OUTPUT);
-        pinMode(Pin::WATER_PUMP, OUTPUT);
-        pinMode(Pin::FAN1, OUTPUT);
-        pinMode(Pin::FAN2, OUTPUT);
-        pinMode(Pin::SENSOR_HAND, INPUT); // 손 감지 센서 초기화
-        
-        // 초기 상태: 모두 OFF
-        digitalWrite(Pin::UV_LIGHT, LOW);
-        digitalWrite(Pin::WATER_PUMP, LOW);
-        digitalWrite(Pin::FAN1, LOW);
-        digitalWrite(Pin::FAN2, LOW);
-    }
-    
-    static void setUV(bool on) {
-        digitalWrite(Pin::UV_LIGHT, on ? HIGH : LOW);
-    }
-    
-    static void setPump(bool on) {
-        digitalWrite(Pin::WATER_PUMP, on ? HIGH : LOW);
-    }
-    
-    static void setFan1(bool on) {
-        digitalWrite(Pin::FAN1, on ? HIGH : LOW);
-    }
-    
-    static void setFan2(bool on) {
-        digitalWrite(Pin::FAN2, on ? HIGH : LOW);
-    }
-    
-    static void setAllFans(bool on) {
-        setFan1(on);
-        setFan2(on);
-    }
-    
-    static bool isHandDetected() {
-        return digitalRead(Pin::SENSOR_HAND) == HIGH;
     }
 };
 

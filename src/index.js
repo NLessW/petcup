@@ -18,7 +18,7 @@ let servoWriter = null;
 let isProcessing = false;
 let processStep = 0;
 let waitingForConfirmation = false;
-let totalSteps = 10; // 기본 10단계 (손 감지 시 +1)
+let totalSteps = 10; // 10단계 (손 감지는 펌웨어가 자동 처리)
 
 // ========================================
 // Dynamixel Protocol 2.0 구현
@@ -521,38 +521,12 @@ async function confirmInsertion() {
         await moveGripper(false);
         await delay(1500);
 
-        // 손 감지 확인 (petmon.ino 방식)
-        log('손 감지 센서 확인 중...');
-        const isHandDetected = await checkHandDetection();
-
-        if (isHandDetected) {
-            // 손이 감지되면 → 경고 단계 추가
-            processStep = 5;
-            totalSteps = 11; // 손 빼기 단계 포함
-            updateProcessStep(processStep, '✋', '손 감지!', '투입구에서 손을 빼주세요!');
-            log(`[${processStep}/${totalSteps}] *** 손 감지! 손을 빼주세요 ***`);
-            await delay(3000); // 손을 뺄 시간 제공
-            processStep = 6;
-        } else {
-            // 손이 감지되지 않으면 → 바로 문 닫기
-            log('손 감지 안됨 - 안전 확인 완료');
-            processStep = 5; // 손 빼기 단계 없이 진행
-            totalSteps = 10; // 기본 10단계
-        }
-
-        // 문 닫기 단계
-        processStep = processStep;
+        // 5단계: 문 닫기 (펌웨어가 자동으로 손 감지 처리)
+        processStep = 5;
         updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
-        log(`[${processStep}/${totalSteps}] 투입구 닫기...`);
+        log(`[${processStep}/${totalSteps}] 투입구 닫기... (펌웨어가 손 감지 자동 처리)`);
         await sendMainCommand('CLOSE');
-        await delay(3000);
-
-        // 물 분사 단계
-        processStep = processStep + 1;
-        updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
-        log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
-        await sendMainCommand('PUMP:ON');
-        await delay(3000);
+        await delay(5000); // 손 감지 재개방 시간 고려하여 5초 대기
         await sendMainCommand('PUMP:OFF');
         log('물 분사 완료');
 
