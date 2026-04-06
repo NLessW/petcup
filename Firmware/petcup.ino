@@ -51,6 +51,9 @@
     // Fan
     constexpr int FAN1 = 43;
     constexpr int FAN2 = 44;
+
+    // Inverter (MC12B, FA-50)
+    constexpr int INVERTER_ENABLE = 51;
  }
 
  namespace EEPROM_Addr {
@@ -185,6 +188,31 @@ public:
     int getDeviceID() { return deviceID; }
 };
 
+// 인버터 제어 클래스 (MC12B, FA-50)
+class InverterController {
+public:
+    static void init() {
+        pinMode(Pin::INVERTER_ENABLE, OUTPUT);
+        digitalWrite(Pin::INVERTER_ENABLE, LOW);
+    }
+    
+    static void enable() {
+        digitalWrite(Pin::INVERTER_ENABLE, HIGH);
+    }
+    
+    static void disable() {
+        digitalWrite(Pin::INVERTER_ENABLE, LOW);
+    }
+    
+    static void on() {
+        digitalWrite(Pin::INVERTER_ENABLE, HIGH);
+    }
+    
+    static void off() {
+        digitalWrite(Pin::INVERTER_ENABLE, LOW);
+    }
+};
+
 // 문 제어 클래스
 class DoorController {
 private:
@@ -252,6 +280,8 @@ public:
                 if (isDoorClosed()) {
                     motor.stop();
                     state = DOOR_CLOSED;
+                    // 문이 닫히면 인버터(MC12B) 켜기
+                    InverterController::enable();
                 }
                 break;
             case DOOR_OPEN:
@@ -432,6 +462,19 @@ void processCommand(char* cmd) {
             rs485.sendResponse(response);
         }
     }
+    else if (strcmp(command, "MC12B") == 0 || strcmp(command, "INVERTER") == 0) {
+        char* state = strtok(NULL, ":");
+        if (state) {
+            bool on = (strcmp(state, "ON") == 0);
+            if (on) {
+                InverterController::enable();
+            } else {
+                InverterController::disable();
+            }
+            snprintf(response, sizeof(response), "%d:OK:MC12B_%s\n", cmdID, on ? "ON" : "OFF");
+            rs485.sendResponse(response);
+        }
+    }
     else {
         snprintf(response, sizeof(response), "%d:ERROR:UNKNOWN_CMD\n", cmdID);
         rs485.sendResponse(response);
@@ -453,6 +496,7 @@ void setup() {
     // 시스템 초기화
     door.init();
     rs485.init(Defaults::BAUD_RATE);
+    InverterController::init();
     DeviceController::init();
     
     // USB 시리얼 초기화 (웹 테스트용)

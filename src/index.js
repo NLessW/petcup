@@ -130,6 +130,7 @@ async function connectMainController() {
         }
 
         if (!targetPort) {
+            log('[메인] 포트를 찾을 수 없습니다. 포트를 선택해주세요...');
             // 포트가 없으면 사용자에게 선택 요청
             targetPort = await navigator.serial.requestPort({
                 filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
@@ -172,6 +173,7 @@ async function connectServoController() {
         }
 
         if (!targetPort) {
+            log('[서보] 포트를 찾을 수 없습니다. 포트를 선택해주세요...');
             targetPort = await navigator.serial.requestPort({
                 filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
             });
@@ -408,6 +410,8 @@ async function initializeSystem() {
     systemStatusText.textContent = '준비 완료';
     systemBox.classList.remove('disabled');
     document.getElementById('startButton').disabled = false;
+
+    return true;
 }
 
 // ========================================
@@ -420,6 +424,18 @@ async function startProcess() {
         return;
     }
 
+    // 시스템 연결 상태 확인 및 자동 연결
+    if (!mainWriter || !servoWriter) {
+        log('🔌 시스템이 연결되지 않았습니다. 자동 연결을 시작합니다...');
+        const initialized = await initializeSystem();
+        if (!initialized && (!mainWriter || !servoWriter)) {
+            log('❌ 시스템 연결에 실패했습니다. 프로세스를 시작할 수 없습니다.');
+            alert('시스템 연결에 실패했습니다. 하드웨어 연결을 확인하세요.');
+            return;
+        }
+        await delay(1000);
+    }
+
     isProcessing = true;
     processStep = 0;
 
@@ -430,6 +446,12 @@ async function startProcess() {
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     try {
+        // UV와 FAN 켜기
+        log('💡 UV 라이트 및 팬 가동 중...');
+        await sendMainCommand('UV:ON');
+        await sendMainCommand('FAN:ON');
+        await delay(500);
+
         // 1단계: 투입구 열림
         processStep = 1;
         updateProcessStep(processStep, '🚪', '투입구 열기', '문이 열리고 있습니다...');
@@ -520,6 +542,12 @@ async function confirmInsertion() {
         log('✅ 프로세스 완료!');
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
+        // UV, FAN, 인버터 끄기
+        log('💡 UV 라이트, 팬, 인버터 정지...');
+        await sendMainCommand('UV:OFF');
+        await sendMainCommand('FAN:OFF');
+        await sendMainCommand('MC12B:OFF');
+
         await delay(3000);
         isProcessing = false;
         hideProcessScreen();
@@ -544,10 +572,13 @@ function emergencyStop() {
     hideConfirmButton();
     document.getElementById('startButton').disabled = false;
 
-    // 긴급 정지: 모든 모터 정지
+    // 긴급 정지: 모든 모터 및 장치 정지
     if (mainWriter) {
         sendMainCommand('STOP');
         sendMainCommand('PUMP:OFF');
+        sendMainCommand('UV:OFF');
+        sendMainCommand('FAN:OFF');
+        sendMainCommand('MC12B:OFF');
     }
 }
 
@@ -558,7 +589,8 @@ function emergencyStop() {
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 log('PETMON 자동 분류 시스템 v3.0');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log('💡 관리자: 좌측 하단 "시스템 연결" 버튼 클릭');
+log('💡 시스템 준비 완료');
+log('🚀 "시작하기" 버튼을 눌러 프로세스를 시작하세요');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 // Web Serial API 지원 확인
