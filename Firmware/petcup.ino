@@ -56,9 +56,6 @@
     constexpr int INVERTER_ENABLE = 51;
     constexpr int INVERTER_FWD = 40;  // FA-50 Forward Signal
     constexpr int INVERTER_REV = 39;  // FA-50 Reverse Signal
-
-    // hand sensor
-    constexpr int SENSOR_HAND = 22;
  }
 
  namespace EEPROM_Addr {
@@ -215,7 +212,7 @@ public:
         pinMode(Pin::INVERTER_ENABLE, OUTPUT);
         pinMode(Pin::INVERTER_FWD, OUTPUT);
         pinMode(Pin::INVERTER_REV, OUTPUT);
-        
+        digitalWrite(Pin::INVERTER_ENABLE, LOW);
         digitalWrite(Pin::INVERTER_FWD, LOW);
         digitalWrite(Pin::INVERTER_REV, LOW);
     }
@@ -254,49 +251,6 @@ public:
             digitalWrite(Pin::INVERTER_REV, LOW);
             debugLog("🔄 FA-50 REV OFF (Pin 39 = LOW)");
         }
-    }
-};
-
-// 기타 제어 클래스
-class DeviceController {
-public:
-    static void init() {
-        pinMode(Pin::UV_LIGHT, OUTPUT);
-        pinMode(Pin::WATER_PUMP, OUTPUT);
-        pinMode(Pin::FAN1, OUTPUT);
-        pinMode(Pin::FAN2, OUTPUT);
-        pinMode(Pin::SENSOR_HAND, INPUT); // 손 감지 센서 초기화
-        
-        // 초기 상태: 모두 OFF
-        digitalWrite(Pin::UV_LIGHT, LOW);
-        digitalWrite(Pin::WATER_PUMP, LOW);
-        digitalWrite(Pin::FAN1, LOW);
-        digitalWrite(Pin::FAN2, LOW);
-    }
-    
-    static void setUV(bool on) {
-        digitalWrite(Pin::UV_LIGHT, on ? HIGH : LOW);
-    }
-    
-    static void setPump(bool on) {
-        digitalWrite(Pin::WATER_PUMP, on ? HIGH : LOW);
-    }
-    
-    static void setFan1(bool on) {
-        digitalWrite(Pin::FAN1, on ? HIGH : LOW);
-    }
-    
-    static void setFan2(bool on) {
-        digitalWrite(Pin::FAN2, on ? HIGH : LOW);
-    }
-    
-    static void setAllFans(bool on) {
-        setFan1(on);
-        setFan2(on);
-    }
-    
-    static bool isHandDetected() {
-        return digitalRead(Pin::SENSOR_HAND) == HIGH;
     }
 };
 
@@ -364,34 +318,6 @@ public:
                 }
                 break;
             case DOOR_CLOSING:
-                // 손 감지 시 즉시 재개방 및 손 빠질 때까지 대기
-                if (DeviceController::isHandDetected()) {
-                    debugLog("⚠️ HAND DETECTED! Reopening door...");
-                    motor.stop();
-                    motor.forward(speedOpen);
-                    
-                    // 문이 완전히 열릴 때까지 대기
-                    while (!isDoorOpen()) {
-                        delay(10);
-                    }
-                    motor.stop();
-                    debugLog("📂 Door reopened - waiting for hand removal");
-                    
-                    // 손이 빠질 때까지 대기
-                    while (DeviceController::isHandDetected()) {
-                        debugLog("✋ Hand still detected - please remove");
-                        delay(500);
-                    }
-                    
-                    debugLog("✅ Hand removed - closing door again");
-                    delay(1000); // 1초 추가 대기
-                    
-                    // 다시 닫기 시작
-                    state = DOOR_CLOSING;
-                    motor.backward(speedClose);
-                    break;
-                }
-                
                 if (isDoorClosed()) {
                     motor.stop();
                     state = DOOR_CLOSED;
@@ -439,6 +365,44 @@ public:
     }
 };
 
+// 기타 제어 클래스
+class DeviceController {
+public:
+    static void init() {
+        pinMode(Pin::UV_LIGHT, OUTPUT);
+        pinMode(Pin::WATER_PUMP, OUTPUT);
+        pinMode(Pin::FAN1, OUTPUT);
+        pinMode(Pin::FAN2, OUTPUT);
+        
+        // 초기 상태: 모두 OFF
+        digitalWrite(Pin::UV_LIGHT, LOW);
+        digitalWrite(Pin::WATER_PUMP, LOW);
+        digitalWrite(Pin::FAN1, LOW);
+        digitalWrite(Pin::FAN2, LOW);
+    }
+    
+    static void setUV(bool on) {
+        digitalWrite(Pin::UV_LIGHT, on ? HIGH : LOW);
+    }
+    
+    static void setPump(bool on) {
+        digitalWrite(Pin::WATER_PUMP, on ? HIGH : LOW);
+    }
+    
+    static void setFan1(bool on) {
+        digitalWrite(Pin::FAN1, on ? HIGH : LOW);
+    }
+    
+    static void setFan2(bool on) {
+        digitalWrite(Pin::FAN2, on ? HIGH : LOW);
+    }
+    
+    static void setAllFans(bool on) {
+        setFan1(on);
+        setFan2(on);
+    }
+};
+
 // 전역 객체 생성
 MotorDriver doorMotor(Pin::MOTOR_12V_ENB, Pin::MOTOR_12V_IN3, Pin::MOTOR_12V_IN4);
 RS485Communication rs485(Pin::RS485_DE, Pin::RS485_RE, Defaults::DEVICE_ID);
@@ -470,25 +434,9 @@ void processCommand(char* cmd) {
         rs485.sendResponse(response);
     }
     else if (strcmp(command, "CLOSE") == 0) {
-        debugLog("🚪 Closing door... (will wait until fully closed)");
+        debugLog("🚪 Closing door...");
         door.closeDoor();
-        
-        // 문이 완전히 닫힐 때까지 blocking 대기
-        unsigned long startTime = millis();
-        while (!door.isDoorClosed()) {
-            door.update(); // 손 감지 및 재개방 처리
-            delay(10);
-            
-            // 타임아웃 (최대 60초)
-            if (millis() - startTime > 60000) {
-                snprintf(response, sizeof(response), "%d:ERROR:CLOSE_TIMEOUT\n", cmdID);
-                rs485.sendResponse(response);
-                return;
-            }
-        }
-        
-        // 문이 완전히 닫힌 후 응답
-        snprintf(response, sizeof(response), "%d:OK:CLOSED\n", cmdID);
+        snprintf(response, sizeof(response), "%d:OK:CLOSING\n", cmdID);
         rs485.sendResponse(response);
     }
     else if (strcmp(command, "STOP") == 0) {
@@ -590,12 +538,6 @@ void processCommand(char* cmd) {
             snprintf(response, sizeof(response), "%d:OK:REV_%s\n", cmdID, on ? "ON" : "OFF");
             rs485.sendResponse(response);
         }
-    }
-    else if (strcmp(command, "HAND") == 0) {
-        // 손 감지 상태 확인
-        bool handDetected = DeviceController::isHandDetected();
-        snprintf(response, sizeof(response), "%d:HAND:%s\n", cmdID, handDetected ? "DETECTED" : "CLEAR");
-        rs485.sendResponse(response);
     }
     else {
         snprintf(response, sizeof(response), "%d:ERROR:UNKNOWN_CMD\n", cmdID);

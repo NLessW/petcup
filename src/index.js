@@ -18,7 +18,7 @@ let servoWriter = null;
 let isProcessing = false;
 let processStep = 0;
 let waitingForConfirmation = false;
-let totalSteps = 10; // 10단계 (손 감지는 펌웨어가 자동 처리)
+let totalSteps = 10;
 
 // ========================================
 // Dynamixel Protocol 2.0 구현
@@ -208,19 +208,6 @@ async function readMainData() {
                 const line = buffer.substring(0, newlineIndex).trim();
                 if (line.length > 0) {
                     log('[메인] ' + line);
-                    // HAND 명령 응답 파싱
-                    if (line.includes('HAND:DETECTED')) {
-                        lastHandResponse = 'DETECTED';
-                    } else if (line.includes('HAND:CLEAR')) {
-                        lastHandResponse = 'CLEAR';
-                    }
-                    // STATUS 응답 파싱
-                    if (line.includes('STATUS:')) {
-                        const statusMatch = line.match(/STATUS:(\w+)/);
-                        if (statusMatch) {
-                            lastDoorStatus = statusMatch[1];
-                        }
-                    }
                 }
                 buffer = buffer.substring(newlineIndex + 1);
             }
@@ -263,63 +250,6 @@ async function sendMainCommand(cmd) {
         log('[메인] 전송 오류: ' + error.message);
         return false;
     }
-}
-
-// 손 감지 확인 함수
-let lastHandResponse = 'CLEAR';
-let lastDoorStatus = 'UNKNOWN';
-
-async function checkHandDetection() {
-    if (!mainWriter) {
-        return false;
-    }
-    try {
-        lastHandResponse = 'CLEAR'; // 초기화
-        const encoder = new TextEncoder();
-        const command = '1:HAND';
-        const encodedData = encoder.encode(command + '\n');
-        await mainWriter.write(encodedData);
-        log('[전송] 1:HAND');
-        await delay(300); // 응답 대기
-        // lastHandResponse가 readMainData에서 업데이트됨
-        return lastHandResponse === 'DETECTED';
-    } catch (error) {
-        log('[손감지] 확인 오류: ' + error.message);
-        return false;
-    }
-}
-
-// 문 상태 확인 함수
-async function waitForDoorClosed(timeoutMs = 30000) {
-    if (!mainWriter) {
-        log('[문상태] 포트가 연결되지 않았습니다.');
-        return false;
-    }
-
-    const startTime = Date.now();
-    log('🚪 문이 완전히 닫힐 때까지 대기 중...');
-
-    while (Date.now() - startTime < timeoutMs) {
-        try {
-            const encoder = new TextEncoder();
-            const command = '1:STATUS';
-            const encodedData = encoder.encode(command + '\n');
-            await mainWriter.write(encodedData);
-            await delay(500); // 응답 대기 및 체크 간격
-
-            if (lastDoorStatus === 'CLOSED') {
-                log('✅ 문이 완전히 닫혔습니다!');
-                return true;
-            } else {
-                log(`⏳ 문 상태: ${lastDoorStatus} - 계속 대기 중...`);
-            }
-        } catch (error) {
-            log('[문상태] 확인 오류: ' + error.message);
-        }
-    }
-
-    log('⚠️ 타임아웃: 문이 닫히지 않았습니다.');
-    return false;
 }
 
 async function sendServoCommand(packetArray) {
@@ -562,16 +492,14 @@ async function confirmInsertion() {
         await moveGripper(false);
         await delay(1500);
 
-        // 5단계: 문 닫기 (펌웨어가 완전히 닫힐 때까지 blocking 후 응답)
+        // 5단계: 문 닫기
         processStep = 5;
         updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
-        log(`[${processStep}/${totalSteps}] 투입구 닫기... (손 감지 시 자동 재개방)`);
-
-        // CLOSE 명령 - 펌웨어가 문이 완전히 닫힌 후 응답 전송
+        log(`[${processStep}/${totalSteps}] 투입구 닫기...`);
         await sendMainCommand('CLOSE');
-        log('✅ 문이 완전히 닫혔습니다!');
+        await delay(3000);
 
-        // 6단계: 물 분사
+        // 6단계: 물 3초 분사
         processStep = 6;
         updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
@@ -587,7 +515,7 @@ async function confirmInsertion() {
         await moveServo(false);
         await delay(2000);
 
-        // 8단계: 그리퍼 열고 배출
+        // 8단계: 그리퍼 열고 2초 대기
         processStep = 8;
         updateProcessStep(processStep, '📤', '배출 중', '컵을 배출하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 그리퍼 열기 (배출)...`);
@@ -609,19 +537,20 @@ async function confirmInsertion() {
         await delay(2000);
 
         // 프로세스 완료
-        updateProcessStep(totalSteps, '✅', '완료!', '감사합니다. 포인트가 적립되었습니다.');
+        updateProcessStep(10, '✅', '완료!', '감사합니다. 포인트가 적립되었습니다.');
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         log('✅ 프로세스 완료!');
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
         // UV, FAN, 인버터 끄기 (딜레이를 두고 순차적으로 전송)
-        // MC12B(인버터 전원)는 계속 켜두고 FWD 신호만 끔
-        log('💡 UV 라이트, 팬 정지 및 FWD 신호 OFF...');
+        log('💡 UV 라이트, 팬, 인버터 정지...');
         await sendMainCommand('UV:OFF');
         await delay(200);
         await sendMainCommand('FAN:OFF');
         await delay(200);
         await sendMainCommand('FWD:OFF');
+        await delay(200);
+        await sendMainCommand('MC12B:OFF');
 
         await delay(3000);
         isProcessing = false;
@@ -648,7 +577,6 @@ async function emergencyStop() {
     document.getElementById('startButton').disabled = false;
 
     // 긴급 정지: 모든 모터 및 장치 정지 (딜레이를 두고 순차적으로 전송)
-    // MC12B(인버터 전원)는 끄지 않음
     if (mainWriter) {
         await sendMainCommand('STOP');
         await delay(200);
@@ -659,6 +587,8 @@ async function emergencyStop() {
         await sendMainCommand('FAN:OFF');
         await delay(200);
         await sendMainCommand('FWD:OFF');
+        await delay(200);
+        await sendMainCommand('MC12B:OFF');
     }
 }
 
