@@ -14,6 +14,28 @@ let servoReader = null;
 let servoWriter = null;
 
 // ========================================
+// Modbus RTU CRC16 계산 (레이더 센서용)
+// ========================================
+
+function calculateModbusCRC16(buffer) {
+    let crc = 0xffff;
+    for (let pos = 0; pos < buffer.length; pos++) {
+        crc ^= buffer[pos];
+        for (let i = 8; i !== 0; i--) {
+            if ((crc & 0x0001) !== 0) {
+                crc >>= 1;
+                crc ^= 0xa001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    // Swap bytes
+    crc = ((crc & 0x00ff) << 8) | ((crc & 0xff00) >> 8);
+    return crc;
+}
+
+// ========================================
 // Dynamixel Protocol 2.0 구현
 // ========================================
 
@@ -198,25 +220,24 @@ async function writeToPetcup(data) {
 }
 
 // ========================================
-// 레이더/서보 제어 (COM9)
+// 레이더 센서 제어 (COM9 - Modbus RTU)
 // ========================================
 
 async function connectRadar() {
     try {
         radarPort = await navigator.serial.requestPort();
-        await radarPort.open({ baudRate: 9600 });
+        await radarPort.open({ baudRate: 115200 }); // 레이더 센서 보드레이트
 
-        const textDecoder = new TextDecoderStream();
-        const readableStreamClosed = radarPort.readable.pipeTo(textDecoder.writable);
-        radarReader = textDecoder.readable.getReader();
+        // 바이너리 통신을 위한 Raw 스트림 사용
+        radarReader = radarPort.readable.getReader();
         radarWriter = radarPort.writable.getWriter();
 
         document.getElementById('connectRadarBtn').disabled = true;
         document.getElementById('disconnectRadarBtn').disabled = false;
         document.getElementById('radarStatus').textContent = '연결됨';
-        log('[레이더] 포트 연결 성공');
+        log('[레이더] 포트 연결 성공 (Modbus RTU, 115200 baud)');
 
-        readRadarData();
+        // readRadarData()는 더 이상 백그라운드로 실행하지 않음
     } catch (error) {
         log('[레이더] 연결 실패: ' + error.message);
     }
@@ -246,55 +267,73 @@ async function disconnectRadar() {
     }
 }
 
-async function readRadarData() {
-    let buffer = '';
+async function readRadarDistance() {
+    if (!radarReader || !radarWriter) {
+        log('[레이더] 포트가 연결되지 않았습니다.');
+        return null;
+    }
+
     try {
-        while (true) {
-            const { value, done } = await radarReader.read();
+        // Modbus RTU 명령: {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36}
+        const command = new Uint8Array([0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36]);
+
+        // 명령 전송
+        await radarWriter.write(command);
+        log('[레이더] 거리 측정 명령 전송');
+
+        // 응답 대기 (최대 1초)
+        let responseBuffer = new Uint8Array(0);
+        const startTime = Date.now();
+        const timeout = 1000;
+
+        while (Date.now() - startTime < timeout) {
+            const { value, done } = await Promise.race([
+                radarReader.read(),
+                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false }), 100)),
+            ]);
+
             if (done) break;
+            if (!value) continue;
 
-            buffer += value;
-            let newlineIndex;
-            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.substring(0, newlineIndex).trim();
-                if (line.length > 0) {
-                    log('[레이더] ' + line);
+            // 버퍼에 데이터 추가
+            const newBuffer = new Uint8Array(responseBuffer.length + value.length);
+            newBuffer.set(responseBuffer);
+            newBuffer.set(value, responseBuffer.length);
+            responseBuffer = newBuffer;
 
-                    // 거리 데이터 파싱 및 표시
-                    if (line.includes('DISTANCE:') || line.includes('거리:')) {
-                        // "DISTANCE:150" 또는 "거리:150cm" 형태
-                        const distanceMatch = line.match(/(\d+)/);
-                        if (distanceMatch) {
-                            const distance = distanceMatch[1];
-                            document.getElementById('radarData').textContent = `거리: ${distance}cm`;
-                        }
+            // 응답 패킷 확인: [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
+            if (responseBuffer.length >= 7) {
+                if (responseBuffer[0] === 0x01 && responseBuffer[1] === 0x03 && responseBuffer[2] === 0x02) {
+                    // CRC 검증
+                    const receivedCRC = (responseBuffer[5] << 8) | responseBuffer[6];
+                    const calculatedCRC = calculateModbusCRC16(responseBuffer.slice(0, 5));
+
+                    if (receivedCRC === calculatedCRC) {
+                        const distance = (responseBuffer[3] << 8) | responseBuffer[4];
+                        log(`[레이더] 거리: ${distance}mm`);
+                        document.getElementById('radarData').textContent =
+                            `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
+                        return distance;
                     } else {
-                        // 기타 데이터도 표시
-                        document.getElementById('radarData').textContent = '레이더: ' + line;
+                        log(`[레이더] CRC 오류: 수신=${receivedCRC.toString(16)}, 계산=${calculatedCRC.toString(16)}`);
                     }
                 }
-                buffer = buffer.substring(newlineIndex + 1);
+                break; // 7바이트 이상 받으면 종료
             }
         }
+
+        if (responseBuffer.length === 0) {
+            log('[레이더] 응답 없음 (타임아웃)');
+        }
+
+        return null;
     } catch (error) {
         log('[레이더] 수신 오류: ' + error.message);
+        return null;
     }
 }
 
-async function writeToRadar(data) {
-    if (!radarWriter) {
-        log('[레이더] 포트가 연결되지 않았습니다.');
-        return;
-    }
-    try {
-        const encoder = new TextEncoder();
-        const encodedData = encoder.encode(data + '\n');
-        await radarWriter.write(encodedData);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-    } catch (error) {
-        log('[레이더] 전송 오류: ' + error.message);
-    }
-}
+// 레이더 센서는 이제 readRadarDistance() 함수로 직접 측정
 
 // ========================================
 // XL430 서보 모터 제어 (COM5)
@@ -409,9 +448,7 @@ function setSpeed() {
 
 // 레이더 명령
 function requestRadarData() {
-    const command = 'RADAR:READ';
-    log(`[전송 레이더] ${command}`);
-    writeToRadar(command);
+    readRadarDistance();
 }
 
 // XL430 서보 명령 (ID 2)
@@ -512,7 +549,7 @@ log('━━━━━━━━━━━━━━━━━━━━━━━━━
 log('');
 log('📡 포트 연결 정보:');
 log('  - 페트컵 제어: COM8 (RS-485, 9600 baud)');
-log('  - 레이더 센서: COM9 (9600 baud)');
+log('  - 레이더 센서: COM9 (Modbus RTU, 115200 baud)');
 log('  - XL430 서보: COM5 (Dynamixel Protocol 2.0, 57600 baud)');
 log('');
 log('💡 사용 방법:');
