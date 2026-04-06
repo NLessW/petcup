@@ -277,53 +277,75 @@ async function readRadarDistance() {
         // Modbus RTU 명령: {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36}
         const command = new Uint8Array([0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36]);
 
-        // 명령 전송
+        // 아두이노 코드처럼: 명령 전송
         await radarWriter.write(command);
         log('[레이더] 거리 측정 명령 전송');
 
-        // 응답 대기 (최대 1초)
-        let responseBuffer = new Uint8Array(0);
+        // 명령 전송 후 대기 (아두이노: delay(10))
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // 응답 읽기 (아두이노의 readN 함수와 유사하게)
+        const responseData = new Uint8Array(7); // [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
+        let offset = 0;
         const startTime = Date.now();
-        const timeout = 1000;
+        const timeout = 500; // 아두이노와 동일하게 500ms
 
-        while (Date.now() - startTime < timeout) {
-            const { value, done } = await Promise.race([
-                radarReader.read(),
-                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false }), 100)),
-            ]);
+        while (offset < 7 && Date.now() - startTime < timeout) {
+            const { value, done } = await radarReader.read();
 
-            if (done) break;
-            if (!value) continue;
+            if (done) {
+                log('[레이더] 연결이 종료되었습니다.');
+                break;
+            }
 
-            // 버퍼에 데이터 추가
-            const newBuffer = new Uint8Array(responseBuffer.length + value.length);
-            newBuffer.set(responseBuffer);
-            newBuffer.set(value, responseBuffer.length);
-            responseBuffer = newBuffer;
+            if (value && value.length > 0) {
+                // 받은 데이터를 responseData에 복사
+                const bytesToCopy = Math.min(value.length, 7 - offset);
+                responseData.set(value.slice(0, bytesToCopy), offset);
+                offset += bytesToCopy;
 
-            // 응답 패킷 확인: [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
-            if (responseBuffer.length >= 7) {
-                if (responseBuffer[0] === 0x01 && responseBuffer[1] === 0x03 && responseBuffer[2] === 0x02) {
-                    // CRC 검증
-                    const receivedCRC = (responseBuffer[5] << 8) | responseBuffer[6];
-                    const calculatedCRC = calculateModbusCRC16(responseBuffer.slice(0, 5));
+                // 7바이트 모두 받았으면 파싱
+                if (offset >= 7) {
+                    // 응답 패킷 구조 확인: [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
+                    if (responseData[0] === 0x01 && responseData[1] === 0x03 && responseData[2] === 0x02) {
+                        // CRC 검증 (아두이노: Data[5] * 256 + Data[6])
+                        const receivedCRC = responseData[5] * 256 + responseData[6];
+                        const calculatedCRC = calculateModbusCRC16(responseData.slice(0, 5));
 
-                    if (receivedCRC === calculatedCRC) {
-                        const distance = (responseBuffer[3] << 8) | responseBuffer[4];
-                        log(`[레이더] 거리: ${distance}mm`);
-                        document.getElementById('radarData').textContent =
-                            `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
-                        return distance;
+                        if (receivedCRC === calculatedCRC) {
+                            // 거리 계산 (아두이노: Data[3] * 256 + Data[4])
+                            const distance = responseData[3] * 256 + responseData[4];
+                            log(`[레이더] 거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`);
+                            document.getElementById('radarData').textContent =
+                                `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
+                            return distance;
+                        } else {
+                            log(
+                                `[레이더] CRC 오류: 수신=0x${receivedCRC.toString(16)}, 계산=0x${calculatedCRC.toString(16)}`,
+                            );
+                            // 디버그: 받은 패킷 출력
+                            log(
+                                `[레이더] 받은 패킷: ${Array.from(responseData)
+                                    .map((b) => '0x' + b.toString(16).padStart(2, '0'))
+                                    .join(' ')}`,
+                            );
+                        }
                     } else {
-                        log(`[레이더] CRC 오류: 수신=${receivedCRC.toString(16)}, 계산=${calculatedCRC.toString(16)}`);
+                        log(
+                            `[레이더] 잘못된 패킷 헤더: ${Array.from(responseData.slice(0, 3))
+                                .map((b) => '0x' + b.toString(16).padStart(2, '0'))
+                                .join(' ')}`,
+                        );
                     }
+                    break;
                 }
-                break; // 7바이트 이상 받으면 종료
             }
         }
 
-        if (responseBuffer.length === 0) {
-            log('[레이더] 응답 없음 (타임아웃)');
+        if (offset === 0) {
+            log('[레이더] 응답 없음 (타임아웃) - 센서 연결 및 전원을 확인하세요');
+        } else if (offset < 7) {
+            log(`[레이더] 불완전한 응답: ${offset}/7 바이트 수신`);
         }
 
         return null;
