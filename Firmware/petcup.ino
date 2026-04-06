@@ -56,6 +56,9 @@
     constexpr int INVERTER_ENABLE = 51;
     constexpr int INVERTER_FWD = 40;  // FA-50 Forward Signal
     constexpr int INVERTER_REV = 39;  // FA-50 Reverse Signal
+
+    // hand sensor
+    constexpr int SENSOR_HAND = 22;
  }
 
  namespace EEPROM_Addr {
@@ -212,7 +215,7 @@ public:
         pinMode(Pin::INVERTER_ENABLE, OUTPUT);
         pinMode(Pin::INVERTER_FWD, OUTPUT);
         pinMode(Pin::INVERTER_REV, OUTPUT);
-        digitalWrite(Pin::INVERTER_ENABLE, LOW);
+        
         digitalWrite(Pin::INVERTER_FWD, LOW);
         digitalWrite(Pin::INVERTER_REV, LOW);
     }
@@ -318,6 +321,15 @@ public:
                 }
                 break;
             case DOOR_CLOSING:
+                // 손 감지 시 즉시 재개방
+                if (DeviceController::isHandDetected()) {
+                    debugLog("⚠️ HAND DETECTED! Reopening door...");
+                    motor.stop();
+                    state = DOOR_OPENING;
+                    motor.forward(speedOpen);
+                    break;
+                }
+                
                 if (isDoorClosed()) {
                     motor.stop();
                     state = DOOR_CLOSED;
@@ -373,6 +385,7 @@ public:
         pinMode(Pin::WATER_PUMP, OUTPUT);
         pinMode(Pin::FAN1, OUTPUT);
         pinMode(Pin::FAN2, OUTPUT);
+        pinMode(Pin::SENSOR_HAND, INPUT); // 손 감지 센서 초기화
         
         // 초기 상태: 모두 OFF
         digitalWrite(Pin::UV_LIGHT, LOW);
@@ -400,6 +413,10 @@ public:
     static void setAllFans(bool on) {
         setFan1(on);
         setFan2(on);
+    }
+    
+    static bool isHandDetected() {
+        return digitalRead(Pin::SENSOR_HAND) == HIGH;
     }
 };
 
@@ -538,6 +555,12 @@ void processCommand(char* cmd) {
             snprintf(response, sizeof(response), "%d:OK:REV_%s\n", cmdID, on ? "ON" : "OFF");
             rs485.sendResponse(response);
         }
+    }
+    else if (strcmp(command, "HAND") == 0) {
+        // 손 감지 상태 확인
+        bool handDetected = DeviceController::isHandDetected();
+        snprintf(response, sizeof(response), "%d:HAND:%s\n", cmdID, handDetected ? "DETECTED" : "CLEAR");
+        rs485.sendResponse(response);
     }
     else {
         snprintf(response, sizeof(response), "%d:ERROR:UNKNOWN_CMD\n", cmdID);
