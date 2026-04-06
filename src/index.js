@@ -367,7 +367,7 @@ function delay(ms) {
 
 async function initializeSystem() {
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    log('PETMON 시스템 초기화 시작');
+    log('PETCUP 시작');
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     const systemBox = document.getElementById('systemBox');
@@ -468,7 +468,7 @@ async function startProcess() {
 
         // 3단계: 투입 완료 대기
         processStep = 3;
-        updateProcessStep(processStep, '📦', 'PET병 투입', 'PET병을 투입구에 넣어주세요');
+        updateProcessStep(processStep, '📦', '컵 투입', '컵을 투입구에 넣어주세요');
         log(`[${processStep}/${totalSteps}] 투입 완료 대기 중...`);
         showConfirmButton();
         waitingForConfirmation = true;
@@ -512,15 +512,15 @@ async function confirmInsertion() {
 
         // 7단계: 서보 모터 뒤로 이동
         processStep = 7;
-        updateProcessStep(processStep, '🔄', '이동 중', '배출 위치로 이동하고 있습니다...');
+        updateProcessStep(processStep, '🔄', '이동 중', '투입 위치로 이동하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 서보 모터 뒤로 이동...`);
         await moveServo(false);
         await delay(2000);
 
         // 8단계: 그리퍼 열고 2초 대기
         processStep = 8;
-        updateProcessStep(processStep, '📤', '배출 중', '컵을 배출하고 있습니다...');
-        log(`[${processStep}/${totalSteps}] 그리퍼 열기 (배출)...`);
+        updateProcessStep(processStep, '📤', '투입 중', '컵을 투입하고 있습니다...');
+        log(`[${processStep}/${totalSteps}] 그리퍼 열기 (투입)...`);
         await moveGripper(true);
         await delay(2000);
 
@@ -548,15 +548,14 @@ async function confirmInsertion() {
         log('⚡ FA-50 인버터 3초 추가 가동 중...');
         await delay(3000);
 
-        // UV, FAN, 인버터 끄기 (딜레이를 두고 순차적으로 전송)
-        log('💡 UV 라이트, 팬, 인버터 정지...');
+        // UV, FAN, FWD 신호 끄기 (MC12B는 계속 켜진 상태 유지)
+        log('💡 UV 라이트, 팬, FWD 신호 정지...');
         await sendMainCommand('UV:OFF');
         await delay(200);
         await sendMainCommand('FAN:OFF');
         await delay(200);
         await sendMainCommand('FWD:OFF');
-        await delay(200);
-        await sendMainCommand('MC12B:OFF');
+        log('✅ MC12B(Pin 51)는 계속 켜진 상태로 유지됩니다.');
 
         await delay(3000);
         isProcessing = false;
@@ -582,7 +581,7 @@ async function emergencyStop() {
     hideConfirmButton();
     document.getElementById('startButton').disabled = false;
 
-    // 긴급 정지: 모든 모터 및 장치 정지 (딜레이를 두고 순차적으로 전송)
+    // 긴급 정지: 모든 모터 및 장치 정지 (MC12B는 유지)
     if (mainWriter) {
         await sendMainCommand('STOP');
         await delay(200);
@@ -593,8 +592,6 @@ async function emergencyStop() {
         await sendMainCommand('FAN:OFF');
         await delay(200);
         await sendMainCommand('FWD:OFF');
-        await delay(200);
-        await sendMainCommand('MC12B:OFF');
     }
 }
 
