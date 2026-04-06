@@ -499,7 +499,7 @@ async function confirmInsertion() {
         await sendMainCommand('CLOSE');
         await delay(3000);
 
-        // 6단계: 물 3초 분사
+        // 6단계: 물 3초 분사 + 2초 대기
         processStep = 6;
         updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
@@ -507,6 +507,8 @@ async function confirmInsertion() {
         await delay(3000);
         await sendMainCommand('PUMP:OFF');
         log('물 분사 완료');
+        log('세척 후 대기 중...');
+        await delay(2000);
 
         // 7단계: 서보 모터 뒤로 이동
         processStep = 7;
@@ -541,6 +543,10 @@ async function confirmInsertion() {
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         log('✅ 프로세스 완료!');
         log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        // FA-50 인버터 3초 추가 가동
+        log('⚡ FA-50 인버터 3초 추가 가동 중...');
+        await delay(3000);
 
         // UV, FAN, 인버터 끄기 (딜레이를 두고 순차적으로 전송)
         log('💡 UV 라이트, 팬, 인버터 정지...');
