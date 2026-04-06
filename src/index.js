@@ -228,8 +228,8 @@ let radarMonitoring = false; // 연속 모니터링 플래그
 async function connectRadar() {
     try {
         radarPort = await navigator.serial.requestPort();
-        // 보드레이트를 9600으로 시도 (일부 레이더 센서는 9600 사용)
-        await radarPort.open({ baudRate: 9600 });
+        // DFRobot SEN0591: 기본 보드레이트 115200
+        await radarPort.open({ baudRate: 115200 });
 
         // 바이너리 통신을 위한 Raw 스트림 사용
         radarReader = radarPort.readable.getReader();
@@ -238,7 +238,7 @@ async function connectRadar() {
         document.getElementById('connectRadarBtn').disabled = true;
         document.getElementById('disconnectRadarBtn').disabled = false;
         document.getElementById('radarStatus').textContent = '연결됨';
-        log('[레이더] 포트 연결 성공 (9600 baud)');
+        log('[레이더] DFRobot SEN0591 연결 성공 (115200 baud)');
         log('[레이더] 자동 수신 데이터 모니터링 시작...');
 
         // 백그라운드로 연속 데이터 수신 시작
@@ -647,7 +647,7 @@ log('━━━━━━━━━━━━━━━━━━━━━━━━━
 log('');
 log('📡 포트 연결 정보:');
 log('  - 페트컵 제어: COM8 (RS-485, 9600 baud)');
-log('  - 레이더 센서: COM9 (자동 감지, 9600 baud 시도)');
+log('  - 레이더 센서: COM9 (DFRobot SEN0591, 115200 baud)');
 log('  - XL430 서보: COM5 (Dynamixel Protocol 2.0, 57600 baud)');
 log('');
 log('💡 사용 방법:');
