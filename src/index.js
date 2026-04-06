@@ -223,10 +223,13 @@ async function writeToPetcup(data) {
 // 레이더 센서 제어 (COM9 - Modbus RTU)
 // ========================================
 
+let radarMonitoring = false; // 연속 모니터링 플래그
+
 async function connectRadar() {
     try {
         radarPort = await navigator.serial.requestPort();
-        await radarPort.open({ baudRate: 115200 }); // 레이더 센서 보드레이트
+        // 보드레이트를 9600으로 시도 (일부 레이더 센서는 9600 사용)
+        await radarPort.open({ baudRate: 9600 });
 
         // 바이너리 통신을 위한 Raw 스트림 사용
         radarReader = radarPort.readable.getReader();
@@ -235,9 +238,12 @@ async function connectRadar() {
         document.getElementById('connectRadarBtn').disabled = true;
         document.getElementById('disconnectRadarBtn').disabled = false;
         document.getElementById('radarStatus').textContent = '연결됨';
-        log('[레이더] 포트 연결 성공 (Modbus RTU, 115200 baud)');
+        log('[레이더] 포트 연결 성공 (9600 baud)');
+        log('[레이더] 자동 수신 데이터 모니터링 시작...');
 
-        // readRadarData()는 더 이상 백그라운드로 실행하지 않음
+        // 백그라운드로 연속 데이터 수신 시작
+        radarMonitoring = true;
+        monitorRadarData();
     } catch (error) {
         log('[레이더] 연결 실패: ' + error.message);
     }
@@ -245,6 +251,8 @@ async function connectRadar() {
 
 async function disconnectRadar() {
     try {
+        radarMonitoring = false; // 모니터링 중지
+
         if (radarReader) {
             await radarReader.cancel();
             radarReader = null;
@@ -264,6 +272,46 @@ async function disconnectRadar() {
         log('[레이더] 포트 연결 해제');
     } catch (error) {
         log('[레이더] 연결 해제 실패: ' + error.message);
+    }
+}
+
+// 레이더 센서 자동 수신 모니터링 (연속 모드)
+async function monitorRadarData() {
+    log('[레이더] 연속 모니터링 시작 - 센서가 보내는 모든 데이터 출력');
+
+    try {
+        while (radarMonitoring && radarReader) {
+            const { value, done } = await Promise.race([
+                radarReader.read(),
+                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false, timeout: true }), 2000)),
+            ]);
+
+            if (!radarMonitoring) break;
+            if (done) {
+                log('[레이더] 연결 종료');
+                break;
+            }
+
+            if (value && value.length > 0) {
+                const hexString = Array.from(value)
+                    .map((b) => '0x' + b.toString(16).padStart(2, '0'))
+                    .join(' ');
+                log(`[레이더 수신] ${value.length}바이트: ${hexString}`);
+
+                // 간단한 자동 파싱 시도 (패킷이 충분하면)
+                if (value.length >= 7 && value[0] === 0x01 && value[1] === 0x03 && value[2] === 0x02) {
+                    const distance = value[3] * 256 + value[4];
+                    log(`[레이더 자동파싱] 거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`);
+                    document.getElementById('radarData').textContent =
+                        `거리: ${distance}mm (${(distance / 10).toFixed(1)}cm)`;
+                }
+            }
+
+            // CPU 부하 방지
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+    } catch (error) {
+        log('[레이더] 모니터링 오류: ' + error.message);
     }
 }
 
@@ -492,8 +540,13 @@ function setSpeed() {
 }
 
 // 레이더 명령
-function requestRadarData() {
-    readRadarDistance();
+async function requestRadarData() {
+    // 연속 모니터링 중에는 명령 모드로 전환
+    if (radarMonitoring) {
+        log('[레이더] 연속 모니터링 중... 명령 전송 모드는 연결 해제 후 재연결 필요');
+        return;
+    }
+    await readRadarDistance();
 }
 
 // XL430 서보 명령 (ID 2)
@@ -594,13 +647,14 @@ log('━━━━━━━━━━━━━━━━━━━━━━━━━
 log('');
 log('📡 포트 연결 정보:');
 log('  - 페트컵 제어: COM8 (RS-485, 9600 baud)');
-log('  - 레이더 센서: COM9 (Modbus RTU, 115200 baud)');
+log('  - 레이더 센서: COM9 (자동 감지, 9600 baud 시도)');
 log('  - XL430 서보: COM5 (Dynamixel Protocol 2.0, 57600 baud)');
 log('');
 log('💡 사용 방법:');
 log('  1. 각 포트를 순서대로 연결하세요');
-log('  2. XL430 사용 전 먼저 "토크 ON" 버튼 클릭');
-log('  3. 서보 ID가 1이 아닌 경우 Dynamixel ID 변경');
+log('  2. 레이더 센서: 연결 시 자동으로 수신 데이터 모니터링');
+log('  3. XL430 사용 전 먼저 "토크 ON" 버튼 클릭');
+log('  4. 서보 ID가 1이 아닌 경우 Dynamixel ID 변경');
 log('');
 log('🔧 명령 형식 (페트컵): <ID>:<CMD>:<PARAM>');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
