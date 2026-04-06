@@ -290,22 +290,51 @@ async function readRadarDistance() {
         const startTime = Date.now();
         const timeout = 500; // 아두이노와 동일하게 500ms
 
-        while (offset < 7 && Date.now() - startTime < timeout) {
-            const { value, done } = await radarReader.read();
+        while (offset < 7) {
+            const remainingTime = timeout - (Date.now() - startTime);
+            if (remainingTime <= 0) {
+                log('[레이더] 응답 타임아웃 (500ms 초과)');
+                break;
+            }
 
-            if (done) {
+            // Promise.race로 read()와 타임아웃을 경쟁시킴
+            const result = await Promise.race([
+                radarReader.read(),
+                new Promise((resolve) =>
+                    setTimeout(() => resolve({ value: null, done: false, timeout: true }), remainingTime),
+                ),
+            ]);
+
+            if (result.timeout) {
+                log('[레이더] 응답 없음 (타임아웃)');
+                break;
+            }
+
+            if (result.done) {
                 log('[레이더] 연결이 종료되었습니다.');
                 break;
             }
 
-            if (value && value.length > 0) {
+            if (result.value && result.value.length > 0) {
+                log(
+                    `[레이더] 수신: ${result.value.length} 바이트 - ${Array.from(result.value)
+                        .map((b) => '0x' + b.toString(16).padStart(2, '0'))
+                        .join(' ')}`,
+                );
+
                 // 받은 데이터를 responseData에 복사
-                const bytesToCopy = Math.min(value.length, 7 - offset);
-                responseData.set(value.slice(0, bytesToCopy), offset);
+                const bytesToCopy = Math.min(result.value.length, 7 - offset);
+                responseData.set(result.value.slice(0, bytesToCopy), offset);
                 offset += bytesToCopy;
 
                 // 7바이트 모두 받았으면 파싱
                 if (offset >= 7) {
+                    log(
+                        `[레이더] 완전한 패킷 수신: ${Array.from(responseData)
+                            .map((b) => '0x' + b.toString(16).padStart(2, '0'))
+                            .join(' ')}`,
+                    );
+
                     // 응답 패킷 구조 확인: [0x01, 0x03, 0x02, DATA_H, DATA_L, CRC_L, CRC_H]
                     if (responseData[0] === 0x01 && responseData[1] === 0x03 && responseData[2] === 0x02) {
                         // CRC 검증 (아두이노: Data[5] * 256 + Data[6])
@@ -322,12 +351,6 @@ async function readRadarDistance() {
                         } else {
                             log(
                                 `[레이더] CRC 오류: 수신=0x${receivedCRC.toString(16)}, 계산=0x${calculatedCRC.toString(16)}`,
-                            );
-                            // 디버그: 받은 패킷 출력
-                            log(
-                                `[레이더] 받은 패킷: ${Array.from(responseData)
-                                    .map((b) => '0x' + b.toString(16).padStart(2, '0'))
-                                    .join(' ')}`,
                             );
                         }
                     } else {
