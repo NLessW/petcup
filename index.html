@@ -308,9 +308,9 @@
                     <h3>가동 상태</h3>
                     <div class="value" id="operationStatus">정상</div>
                 </div>
-                <div class="status-box">
+                <div class="status-box" id="inputStatusBox">
                     <h3>투명 페트컵 투입</h3>
-                    <div class="value" id="inputStatus">가능</div>
+                    <div class="value" id="inputStatus">가능 (0%)</div>
                 </div>
                 <div class="status-box disabled" id="systemBox">
                     <h3>시스템</h3>
@@ -351,6 +351,7 @@
         <!-- 관리자 패널 -->
         <div class="admin-panel">
             <button onclick="toggleLog()">로그</button>
+            <button onclick="connectDistanceSensor()">센서 연결</button>
         </div>
 
         <!-- 로그 팝업 -->

@@ -1,8 +1,8 @@
 // ========================================
-// PETMON 자동 분류 시스템
+// PETMON 자동 분류 시스템 - Modbus RTU
 // ========================================
 
-// 메인 컨트롤러 포트 (RS-485)
+// 메인 컨트롤러 포트 (RS-485 with Modbus RTU)
 // VID_0403+PID_6001+A5069RR4A\0000
 let mainPort = null;
 let mainReader = null;
@@ -14,11 +14,411 @@ let servoPort = null;
 let servoReader = null;
 let servoWriter = null;
 
+// SEN0591 거리 센서 포트
+let sensorPort = null;
+let sensorReader = null;
+let sensorWriter = null;
+let sensorPolling = false;
+
 // 시스템 상태
 let isProcessing = false;
 let processStep = 0;
 let waitingForConfirmation = false;
 let totalSteps = 10;
+
+// 수거 상태 변수
+let currentCollectionPercent = 0;
+const MAX_DISTANCE_MM = 575; // 575mm를 기준으로 설정
+
+// Modbus RTU 설정
+const MODBUS_SLAVE_ID = 1;
+
+// ========================================
+// Modbus RTU Register Map
+// ========================================
+const ModbusReg = {
+    DOOR_CMD: 0x0000,
+    DOOR_STATUS: 0x0001,
+    UV_CTRL: 0x0002,
+    PUMP_CTRL: 0x0003,
+    FAN1_CTRL: 0x0004,
+    FAN2_CTRL: 0x0005,
+    INVERTER_CTRL: 0x0006,
+    FWD_SIGNAL: 0x0007,
+    REV_SIGNAL: 0x0008,
+    DOOR_SPEED_OPEN: 0x0009,
+    DOOR_SPEED_CLOSE: 0x000a,
+    SENSOR_OPEN: 0x000b,
+    SENSOR_CLOSE: 0x000c,
+};
+
+const ModbusFunc = {
+    READ_HOLDING_REGISTERS: 0x03,
+    WRITE_SINGLE_REGISTER: 0x06,
+    WRITE_MULTIPLE_REGISTERS: 0x10,
+};
+
+// ========================================
+// Modbus RTU CRC-16 계산
+// ========================================
+function calculateModbusCRC(data) {
+    let crc = 0xffff;
+
+    for (let i = 0; i < data.length; i++) {
+        crc ^= data[i];
+
+        for (let j = 0; j < 8; j++) {
+            if (crc & 0x0001) {
+                crc >>= 1;
+                crc ^= 0xa001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+
+    return crc;
+}
+
+// ========================================
+// SEN0591 거리 센서 함수
+// ========================================
+
+// SEN0591 센서 연결 (VID_0403+PID_6001+A5069RR4A\0000)
+async function connectDistanceSensor() {
+    try {
+        log('[센서] 거리 센서 포트 선택 중...');
+
+        // 기존 getPorts()로 해당 VID/PID 찾기
+        const ports = await navigator.serial.getPorts();
+        let targetPort = null;
+
+        // VID_0403+PID_6001인 포트 중 메인/서보가 아닌 포트 찾기
+        for (const port of ports) {
+            const info = port.getInfo();
+            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
+                if (port !== mainPort && port !== servoPort) {
+                    targetPort = port;
+                    log('[센서] A5069RR4A 포트 자동 검색됨');
+                    break;
+                }
+            }
+        }
+
+        // 찾지 못하면 사용자가 직접 선택
+        if (!targetPort) {
+            log('[센서] 자동 검색 실패. 포트를 선택해주세요...');
+            targetPort = await navigator.serial.requestPort({
+                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+            });
+        }
+
+        sensorPort = targetPort;
+        const baudRate = 115200;
+        await sensorPort.open({
+            baudRate: baudRate,
+            dataBits: 8,
+            stopBits: 1,
+            parity: 'none',
+            flowControl: 'none',
+        });
+
+        sensorReader = sensorPort.readable.getReader();
+        sensorWriter = sensorPort.writable.getWriter();
+
+        log(`[센서] SEN0591 센서 연결 성공 (${baudRate} baud)`);
+
+        // 데이터 수신 시작
+        readSensorData();
+
+        // 폴링 시작
+        startSensorPolling();
+
+        return true;
+    } catch (error) {
+        log(`[센서] 연결 실패: ${error.message}`);
+        return false;
+    }
+}
+
+// 센서에 거리 요청 명령 전송
+async function sendSensorDistanceCommand() {
+    if (!sensorWriter) return;
+
+    try {
+        // 명령: 0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36
+        const command = new Uint8Array([0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xd4, 0x36]);
+        await sensorWriter.write(command);
+    } catch (error) {
+        log(`[센서] 명령 전송 오류: ${error.message}`);
+    }
+}
+
+// 주기적으로 센서에 명령 전송 (200ms 간격)
+async function startSensorPolling() {
+    sensorPolling = true;
+
+    while (sensorPolling && sensorPort) {
+        await sendSensorDistanceCommand();
+        await delay(200);
+    }
+}
+
+// 센서 데이터 읽기
+async function readSensorData() {
+    let buffer = new Uint8Array(0);
+
+    try {
+        while (sensorPort) {
+            const { value, done } = await sensorReader.read();
+            if (done) break;
+
+            if (value) {
+                // 버퍼에 추가
+                const newBuffer = new Uint8Array(buffer.length + value.length);
+                newBuffer.set(buffer);
+                newBuffer.set(value, buffer.length);
+                buffer = newBuffer;
+
+                // Modbus 응답 파싱
+                buffer = parseSensorModbusResponse(buffer);
+            }
+        }
+    } catch (error) {
+        if (sensorPolling) {
+            log(`[센서] 읽기 오류: ${error.message}`);
+        }
+    }
+}
+
+// Modbus 응답 파싱 및 % 계산
+function parseSensorModbusResponse(buffer) {
+    // Modbus 응답 형식: 0x01 0x03 0x02 [DATA_H] [DATA_L] [CRC_L] [CRC_H]
+    // 최소 7바이트 필요
+    while (buffer.length >= 7) {
+        // 헤더 찾기: 0x01 0x03
+        let headerIndex = -1;
+        for (let i = 0; i < buffer.length - 1; i++) {
+            if (buffer[i] === 0x01 && buffer[i + 1] === 0x03) {
+                headerIndex = i;
+                break;
+            }
+        }
+
+        if (headerIndex === -1) {
+            // 헤더 없음 - 버퍼 비우기
+            return new Uint8Array();
+        }
+
+        // 헤더 이전 데이터 제거
+        if (headerIndex > 0) {
+            buffer = buffer.slice(headerIndex);
+        }
+
+        // 충분한 데이터가 있는지 확인
+        if (buffer.length < 7) {
+            break;
+        }
+
+        // 데이터 길이 확인
+        if (buffer[2] === 0x02) {
+            // 패킷 추출
+            const packet = buffer.slice(0, 7);
+
+            // CRC 검증 (Modbus RTU: Low Byte 먼저, High Byte 나중)
+            const dataPart = packet.slice(0, 5);
+            const receivedCRC = packet[5] | (packet[6] << 8);
+            const calculatedCRC = calculateModbusCRC(dataPart);
+
+            if (receivedCRC === calculatedCRC) {
+                // 거리 데이터 추출 (mm 단위)
+                const distanceMm = (packet[3] << 8) | packet[4];
+
+                // 퍼센트 계산 (575mm 기준)
+                // 0mm = 100%, 575mm 이상 = 0%
+                let percent = 0;
+                if (distanceMm >= 0 && distanceMm < MAX_DISTANCE_MM) {
+                    percent = Math.round((1 - distanceMm / MAX_DISTANCE_MM) * 100);
+                } else if (distanceMm >= MAX_DISTANCE_MM) {
+                    percent = 0;
+                }
+
+                // 음수 방지
+                if (percent < 0) percent = 0;
+                if (percent > 100) percent = 100;
+
+                currentCollectionPercent = percent;
+                updateCollectionDisplay(percent, distanceMm);
+
+                // 디버그 로그
+                log(`[센서] 거리: ${distanceMm}mm, 수거율: ${percent}%`);
+            } else {
+                log(
+                    `[센서] CRC 오류: 수신=0x${receivedCRC.toString(16).padStart(4, '0')}, 계산=0x${calculatedCRC.toString(16).padStart(4, '0')}`,
+                );
+            }
+
+            // 처리된 패킷 제거
+            buffer = buffer.slice(7);
+        } else {
+            // 잘못된 패킷 - 1바이트 건너뛰기
+            buffer = buffer.slice(1);
+        }
+    }
+
+    return buffer;
+}
+
+// 수거 상태 UI 업데이트
+function updateCollectionDisplay(percent, distanceMm) {
+    const inputStatus = document.getElementById('inputStatus');
+    const inputStatusBox = document.getElementById('inputStatusBox');
+    const startButton = document.getElementById('startButton');
+
+    if (inputStatus) {
+        // 100%일 때 불가능으로 표시
+        if (percent >= 90) {
+            inputStatus.textContent = '불가능 (90%)';
+            inputStatus.style.color = '#e74c3c'; // 빨간색
+            if (inputStatusBox) {
+                inputStatusBox.classList.add('disabled');
+            }
+            // 시작 버튼 비활성화
+            if (startButton && !isProcessing) {
+                startButton.disabled = true;
+                startButton.style.opacity = '0.5';
+                startButton.style.cursor = 'not-allowed';
+            }
+        } else if (percent >= 80) {
+            inputStatus.textContent = `가능 (${percent}%)`;
+            inputStatus.style.color = '#f39c12'; // 주황색 (거의 가득 참)
+            if (inputStatusBox) {
+                inputStatusBox.classList.remove('disabled');
+            }
+            // 시작 버튼 활성화
+            if (startButton && !isProcessing) {
+                startButton.disabled = false;
+                startButton.style.opacity = '1';
+                startButton.style.cursor = 'pointer';
+            }
+        } else if (percent >= 50) {
+            inputStatus.textContent = `가능 (${percent}%)`;
+            inputStatus.style.color = '#f6ad55'; // 연한 주황색
+            if (inputStatusBox) {
+                inputStatusBox.classList.remove('disabled');
+            }
+            // 시작 버튼 활성화
+            if (startButton && !isProcessing) {
+                startButton.disabled = false;
+                startButton.style.opacity = '1';
+                startButton.style.cursor = 'pointer';
+            }
+        } else {
+            inputStatus.textContent = `가능 (${percent}%)`;
+            inputStatus.style.color = '#27ae60'; // 초록색
+            if (inputStatusBox) {
+                inputStatusBox.classList.remove('disabled');
+            }
+            // 시작 버튼 활성화
+            if (startButton && !isProcessing) {
+                startButton.disabled = false;
+                startButton.style.opacity = '1';
+                startButton.style.cursor = 'pointer';
+            }
+        }
+    }
+}
+
+// 센서 연결 해제
+async function disconnectSensor() {
+    try {
+        sensorPolling = false;
+
+        if (sensorReader) {
+            await sensorReader.cancel();
+            sensorReader.releaseLock();
+            sensorReader = null;
+        }
+
+        if (sensorWriter) {
+            sensorWriter.releaseLock();
+            sensorWriter = null;
+        }
+
+        if (sensorPort) {
+            await sensorPort.close();
+            sensorPort = null;
+        }
+
+        log('[센서] 연결이 해제되었습니다.');
+    } catch (error) {
+        log(`[센서] 연결 해제 오류: ${error.message}`);
+    }
+}
+
+// ========================================
+// Modbus RTU 패킷 생성
+// ========================================
+
+// Function 0x03: Read Holding Registers
+function buildReadRegistersPacket(startAddr, numRegs) {
+    const packet = new Uint8Array(8);
+    packet[0] = MODBUS_SLAVE_ID;
+    packet[1] = ModbusFunc.READ_HOLDING_REGISTERS;
+    packet[2] = (startAddr >> 8) & 0xff;
+    packet[3] = startAddr & 0xff;
+    packet[4] = (numRegs >> 8) & 0xff;
+    packet[5] = numRegs & 0xff;
+
+    const crc = calculateModbusCRC(packet.slice(0, 6));
+    packet[6] = crc & 0xff;
+    packet[7] = (crc >> 8) & 0xff;
+
+    return packet;
+}
+
+// Function 0x06: Write Single Register
+function buildWriteSingleRegisterPacket(regAddr, regValue) {
+    const packet = new Uint8Array(8);
+    packet[0] = MODBUS_SLAVE_ID;
+    packet[1] = ModbusFunc.WRITE_SINGLE_REGISTER;
+    packet[2] = (regAddr >> 8) & 0xff;
+    packet[3] = regAddr & 0xff;
+    packet[4] = (regValue >> 8) & 0xff;
+    packet[5] = regValue & 0xff;
+
+    const crc = calculateModbusCRC(packet.slice(0, 6));
+    packet[6] = crc & 0xff;
+    packet[7] = (crc >> 8) & 0xff;
+
+    return packet;
+}
+
+// Function 0x10: Write Multiple Registers
+function buildWriteMultipleRegistersPacket(startAddr, values) {
+    const numRegs = values.length;
+    const byteCount = numRegs * 2;
+    const packet = new Uint8Array(7 + byteCount + 2);
+
+    packet[0] = MODBUS_SLAVE_ID;
+    packet[1] = ModbusFunc.WRITE_MULTIPLE_REGISTERS;
+    packet[2] = (startAddr >> 8) & 0xff;
+    packet[3] = startAddr & 0xff;
+    packet[4] = (numRegs >> 8) & 0xff;
+    packet[5] = numRegs & 0xff;
+    packet[6] = byteCount;
+
+    for (let i = 0; i < numRegs; i++) {
+        packet[7 + i * 2] = (values[i] >> 8) & 0xff;
+        packet[8 + i * 2] = values[i] & 0xff;
+    }
+
+    const crc = calculateModbusCRC(packet.slice(0, 7 + byteCount));
+    packet[7 + byteCount] = crc & 0xff;
+    packet[8 + byteCount] = (crc >> 8) & 0xff;
+
+    return packet;
+}
 
 // ========================================
 // Dynamixel Protocol 2.0 구현
@@ -115,15 +515,12 @@ function buildPositionPacket(id, position) {
 
 async function connectMainController() {
     try {
-        // VID_0403+PID_6001+A5069RR4A\0000로 필터링
         const ports = await navigator.serial.getPorts();
         let targetPort = null;
 
         for (const port of ports) {
             const info = port.getInfo();
             if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
-                // Serial Number 확인하려면 추가 로직 필요
-                // 일단 첫 번째 매칭되는 포트 사용
                 targetPort = port;
                 break;
             }
@@ -131,7 +528,6 @@ async function connectMainController() {
 
         if (!targetPort) {
             log('[메인] 포트를 찾을 수 없습니다. 포트를 선택해주세요...');
-            // 포트가 없으면 사용자에게 선택 요청
             targetPort = await navigator.serial.requestPort({
                 filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
             });
@@ -140,12 +536,11 @@ async function connectMainController() {
         mainPort = targetPort;
         await mainPort.open({ baudRate: 9600 });
 
-        const textDecoder = new TextDecoderStream();
-        mainPort.readable.pipeTo(textDecoder.writable);
-        mainReader = textDecoder.readable.getReader();
+        mainReader = mainPort.readable.getReader();
         mainWriter = mainPort.writable.getWriter();
 
-        log('[메인] RS-485 컨트롤러 연결 성공 (9600 baud)');
+        log('[메인] Modbus RTU 컨트롤러 연결 성공 (9600 baud)');
+        log('[메인] Modbus Slave ID: ' + MODBUS_SLAVE_ID);
 
         readMainData();
         return true;
@@ -155,16 +550,42 @@ async function connectMainController() {
     }
 }
 
+async function readMainData() {
+    let buffer = new Uint8Array(0);
+    try {
+        while (true) {
+            const { value, done } = await mainReader.read();
+            if (done) break;
+
+            // 바이너리 데이터 누적
+            const newBuffer = new Uint8Array(buffer.length + value.length);
+            newBuffer.set(buffer);
+            newBuffer.set(value, buffer.length);
+            buffer = newBuffer;
+
+            // Modbus 응답 파싱 (간단한 로깅)
+            if (buffer.length >= 5) {
+                let hexStr = '[메인] RX: ';
+                for (let i = 0; i < buffer.length; i++) {
+                    hexStr += buffer[i].toString(16).padStart(2, '0').toUpperCase() + ' ';
+                }
+                log(hexStr);
+                buffer = new Uint8Array(0); // 버퍼 초기화
+            }
+        }
+    } catch (error) {
+        log('[메인] 수신 오류: ' + error.message);
+    }
+}
+
 async function connectServoController() {
     try {
-        // VID_0403+PID_6001+AL01QFACA\0000로 필터링
         const ports = await navigator.serial.getPorts();
         let targetPort = null;
 
         for (const port of ports) {
             const info = port.getInfo();
             if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
-                // Main과 다른 포트 찾기
                 if (port !== mainPort) {
                     targetPort = port;
                     break;
@@ -195,28 +616,6 @@ async function connectServoController() {
     }
 }
 
-async function readMainData() {
-    let buffer = '';
-    try {
-        while (true) {
-            const { value, done } = await mainReader.read();
-            if (done) break;
-
-            buffer += value;
-            let newlineIndex;
-            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.substring(0, newlineIndex).trim();
-                if (line.length > 0) {
-                    log('[메인] ' + line);
-                }
-                buffer = buffer.substring(newlineIndex + 1);
-            }
-        }
-    } catch (error) {
-        log('[메인] 수신 오류: ' + error.message);
-    }
-}
-
 async function readServoData() {
     try {
         while (true) {
@@ -230,26 +629,111 @@ async function readServoData() {
 }
 
 // ========================================
-// 명령 전송 함수
+// Modbus 명령 전송 함수
 // ========================================
 
-async function sendMainCommand(cmd) {
+async function writeModbusRegister(regAddr, value) {
     if (!mainWriter) {
         log('[메인] 포트가 연결되지 않았습니다.');
         return false;
     }
     try {
-        const encoder = new TextEncoder();
-        const command = `1:${cmd}`;
-        const encodedData = encoder.encode(command + '\n');
-        await mainWriter.write(encodedData);
-        log(`[전송] ${command}`);
-        await delay(100);
+        const packet = buildWriteSingleRegisterPacket(regAddr, value);
+        await mainWriter.write(packet);
+
+        let hexStr = `[전송] Modbus Write: Addr=0x${regAddr.toString(16).padStart(4, '0')} Value=${value} [`;
+        for (let i = 0; i < packet.length; i++) {
+            hexStr += packet[i].toString(16).padStart(2, '0').toUpperCase() + ' ';
+        }
+        hexStr += ']';
+        log(hexStr);
+
+        await delay(50);
         return true;
     } catch (error) {
         log('[메인] 전송 오류: ' + error.message);
         return false;
     }
+}
+
+async function readModbusRegisters(startAddr, numRegs) {
+    if (!mainWriter) {
+        log('[메인] 포트가 연결되지 않았습니다.');
+        return false;
+    }
+    try {
+        const packet = buildReadRegistersPacket(startAddr, numRegs);
+        await mainWriter.write(packet);
+
+        let hexStr = `[전송] Modbus Read: Addr=0x${startAddr.toString(16).padStart(4, '0')} Count=${numRegs} [`;
+        for (let i = 0; i < packet.length; i++) {
+            hexStr += packet[i].toString(16).padStart(2, '0').toUpperCase() + ' ';
+        }
+        hexStr += ']';
+        log(hexStr);
+
+        await delay(50);
+        return true;
+    } catch (error) {
+        log('[메인] 전송 오류: ' + error.message);
+        return false;
+    }
+}
+
+// ========================================
+// 장치 제어 함수 (Modbus 기반)
+// ========================================
+
+async function openDoor() {
+    log('[문] 열기 명령 전송');
+    return await writeModbusRegister(ModbusReg.DOOR_CMD, 1);
+}
+
+async function closeDoor() {
+    log('[문] 닫기 명령 전송');
+    return await writeModbusRegister(ModbusReg.DOOR_CMD, 2);
+}
+
+async function stopDoor() {
+    log('[문] 정지 명령 전송');
+    return await writeModbusRegister(ModbusReg.DOOR_CMD, 0);
+}
+
+async function setUV(on) {
+    log(`[UV] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    return await writeModbusRegister(ModbusReg.UV_CTRL, on ? 1 : 0);
+}
+
+async function setPump(on) {
+    log(`[펌프] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    return await writeModbusRegister(ModbusReg.PUMP_CTRL, on ? 1 : 0);
+}
+
+async function setFan(on) {
+    log(`[팬] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    await writeModbusRegister(ModbusReg.FAN1_CTRL, on ? 1 : 0);
+    await delay(50);
+    return await writeModbusRegister(ModbusReg.FAN2_CTRL, on ? 1 : 0);
+}
+
+async function setInverter(on) {
+    log(`[인버터] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    return await writeModbusRegister(ModbusReg.INVERTER_CTRL, on ? 1 : 0);
+}
+
+async function setFwd(on) {
+    log(`[FWD] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    return await writeModbusRegister(ModbusReg.FWD_SIGNAL, on ? 1 : 0);
+}
+
+async function setRev(on) {
+    log(`[REV] ${on ? 'ON' : 'OFF'} 명령 전송`);
+    return await writeModbusRegister(ModbusReg.REV_SIGNAL, on ? 1 : 0);
+}
+
+async function getDoorStatus() {
+    log('[상태] 문 상태 확인');
+    return await readModbusRegisters(ModbusReg.DOOR_STATUS, 1);
 }
 
 async function sendServoCommand(packetArray) {
@@ -424,6 +908,13 @@ async function startProcess() {
         return;
     }
 
+    // 수거율이 100%인지 확인
+    if (currentCollectionPercent >= 90) {
+        log('⚠️ 수거함이 가득 찼습니다. 비운 후 다시 시도해주세요.');
+        alert('수거함이 가득 찼습니다 (100%).\n수거함을 비운 후 다시 시도해주세요.');
+        return;
+    }
+
     // 시스템 연결 상태 확인 및 자동 연결
     if (!mainWriter || !servoWriter) {
         log('🔌 시스템이 연결되지 않았습니다. 자동 연결을 시작합니다...');
@@ -442,21 +933,21 @@ async function startProcess() {
     showProcessScreen();
 
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    log('🚀 자동 프로세스 시작');
+    log('🚀 자동 프로세스 시작 (Modbus RTU)');
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     try {
         // UV와 FAN 켜기
         log('💡 UV 라이트 및 팬 가동 중...');
-        await sendMainCommand('UV:ON');
-        await sendMainCommand('FAN:ON');
+        await setUV(true);
+        await setFan(true);
         await delay(500);
 
         // 1단계: 투입구 열림
         processStep = 1;
         updateProcessStep(processStep, '🚪', '투입구 열기', '문이 열리고 있습니다...');
         log(`[${processStep}/${totalSteps}] 투입구 열기...`);
-        await sendMainCommand('OPEN');
+        await openDoor();
         await delay(3000);
 
         // 2단계: 그리퍼 열림
@@ -496,16 +987,16 @@ async function confirmInsertion() {
         processStep = 5;
         updateProcessStep(processStep, '🚪', '투입구 닫기', '투입구를 닫고 있습니다...');
         log(`[${processStep}/${totalSteps}] 투입구 닫기...`);
-        await sendMainCommand('CLOSE');
+        await closeDoor();
         await delay(3000);
 
         // 6단계: 물 3초 분사 + 2초 대기
         processStep = 6;
         updateProcessStep(processStep, '💧', '세척 중', '깨끗하게 세척하고 있습니다...');
         log(`[${processStep}/${totalSteps}] 물 분사 시작...`);
-        await sendMainCommand('PUMP:ON');
+        await setPump(true);
         await delay(3000);
-        await sendMainCommand('PUMP:OFF');
+        await setPump(false);
         log('물 분사 완료');
         log('세척 후 대기 중...');
         await delay(2000);
@@ -550,20 +1041,66 @@ async function confirmInsertion() {
 
         // UV, FAN, FWD 신호 끄기 (MC12B는 계속 켜진 상태 유지)
         log('💡 UV 라이트, 팬, FWD 신호 정지...');
-        await sendMainCommand('UV:OFF');
+        await setUV(false);
         await delay(200);
-        await sendMainCommand('FAN:OFF');
+        await setFan(false);
         await delay(200);
-        await sendMainCommand('FWD:OFF');
+        await setFwd(false);
         log('✅ MC12B(Pin 51)는 계속 켜진 상태로 유지됩니다.');
 
         await delay(3000);
         isProcessing = false;
         hideProcessScreen();
-        document.getElementById('startButton').disabled = false;
+
+        // 수거율에 따라 버튼 상태 결정
+        const startButton = document.getElementById('startButton');
+        if (currentCollectionPercent >= 90) {
+            startButton.disabled = true;
+            startButton.style.opacity = '0.5';
+            startButton.style.cursor = 'not-allowed';
+        } else {
+            startButton.disabled = false;
+            startButton.style.opacity = '1';
+            startButton.style.cursor = 'pointer';
+        }
     } catch (error) {
         log('❌ 프로세스 실행 중 오류: ' + error.message);
         stopProcess();
+    }
+}
+
+async function stopProcess() {
+    log('⚠️ 프로세스 중단!');
+    isProcessing = false;
+    waitingForConfirmation = false;
+    processStep = 0;
+
+    hideProcessScreen();
+    hideConfirmButton();
+
+    // 수거율에 따라 버튼 상태 결정
+    const startButton = document.getElementById('startButton');
+    if (currentCollectionPercent >= 90) {
+        startButton.disabled = true;
+        startButton.style.opacity = '0.5';
+        startButton.style.cursor = 'not-allowed';
+    } else {
+        startButton.disabled = false;
+        startButton.style.opacity = '1';
+        startButton.style.cursor = 'pointer';
+    }
+
+    // 모든 모터 및 장치 정지 (MC12B는 유지)
+    if (mainWriter) {
+        await stopDoor();
+        await delay(200);
+        await setPump(false);
+        await delay(200);
+        await setUV(false);
+        await delay(200);
+        await setFan(false);
+        await delay(200);
+        await setFwd(false);
     }
 }
 
@@ -579,19 +1116,30 @@ async function emergencyStop() {
 
     hideProcessScreen();
     hideConfirmButton();
-    document.getElementById('startButton').disabled = false;
+
+    // 수거율에 따라 버튼 상태 결정
+    const startButton = document.getElementById('startButton');
+    if (currentCollectionPercent >= 90) {
+        startButton.disabled = true;
+        startButton.style.opacity = '0.5';
+        startButton.style.cursor = 'not-allowed';
+    } else {
+        startButton.disabled = false;
+        startButton.style.opacity = '1';
+        startButton.style.cursor = 'pointer';
+    }
 
     // 긴급 정지: 모든 모터 및 장치 정지 (MC12B는 유지)
     if (mainWriter) {
-        await sendMainCommand('STOP');
+        await stopDoor();
         await delay(200);
-        await sendMainCommand('PUMP:OFF');
+        await setPump(false);
         await delay(200);
-        await sendMainCommand('UV:OFF');
+        await setUV(false);
         await delay(200);
-        await sendMainCommand('FAN:OFF');
+        await setFan(false);
         await delay(200);
-        await sendMainCommand('FWD:OFF');
+        await setFwd(false);
     }
 }
 
@@ -600,9 +1148,9 @@ async function emergencyStop() {
 // ========================================
 
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log('PETCUP v3.0');
+log('PETCUP v4.0 - Modbus RTU');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log('💡 시스템 준비 완료');
+log('💡 Modbus RTU 프로토콜 지원');
 log('🚀 "시작하기" 버튼을 눌러 프로세스를 시작하세요');
 log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
@@ -612,4 +1160,22 @@ if (!('serial' in navigator)) {
     log('Chrome 또는 Edge 브라우저를 사용하세요.');
     document.getElementById('operationStatus').textContent = '지원 안됨';
     document.getElementById('operationStatus').style.color = '#e74c3c';
+} else {
+    // 페이지 로드 시 자동으로 센서 연결 시작
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log('📡 거리 센서 자동 연결을 시작합니다...');
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    // 2초 후 센서 연결 시도
+    setTimeout(async () => {
+        try {
+            const connected = await connectDistanceSensor();
+            if (connected) {
+                log('✅ 거리 센서가 성공적으로 연결되었습니다.');
+                log('📊 수거 상태 모니터링 시작...');
+            }
+        } catch (error) {
+            log('⚠️ 센서 자동 연결 실패. 수동으로 연결해주세요.');
+        }
+    }, 2000);
 }
