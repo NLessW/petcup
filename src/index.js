@@ -84,33 +84,22 @@ function calculateModbusCRC(data) {
 // SEN0591 거리 센서 함수
 // ========================================
 
-// SEN0591 센서 연결 (VID_0403+PID_6001+A5069RR4A\0000)
+// SEN0591 센서 연결 (VID_0403+PID_6001+5&2B9650CC&0&8\0000)
 async function connectDistanceSensor() {
     try {
-        log('[센서] 거리 센서 포트 선택 중...');
+        log('[센서] 거리 센서 포트를 선택해주세요...');
 
-        // 기존 getPorts()로 해당 VID/PID 찾기
-        const ports = await navigator.serial.getPorts();
-        let targetPort = null;
+        // 이미 사용 중인 포트 제외
+        const alreadyUsedPorts = [mainPort, servoPort].filter((p) => p !== null);
 
-        // VID_0403+PID_6001인 포트 중 메인/서보가 아닌 포트 찾기
-        for (const port of ports) {
-            const info = port.getInfo();
-            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
-                if (port !== mainPort && port !== servoPort) {
-                    targetPort = port;
-                    log('[센서] A5069RR4A 포트 자동 검색됨');
-                    break;
-                }
-            }
-        }
+        const targetPort = await navigator.serial.requestPort({
+            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+        });
 
-        // 찾지 못하면 사용자가 직접 선택
-        if (!targetPort) {
-            log('[센서] 자동 검색 실패. 포트를 선택해주세요...');
-            targetPort = await navigator.serial.requestPort({
-                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-            });
+        // 이미 사용 중인 포트인지 확인
+        if (alreadyUsedPorts.includes(targetPort)) {
+            log('[센서] 이미 사용 중인 포트입니다. 다른 포트를 선택해주세요.');
+            return false;
         }
 
         sensorPort = targetPort;
@@ -276,7 +265,7 @@ function updateCollectionDisplay(percent, distanceMm) {
     const startButton = document.getElementById('startButton');
 
     if (inputStatus) {
-        // 100%일 때 불가능으로 표시
+        // 90%일 때 불가능으로 표시
         if (percent >= 90) {
             inputStatus.textContent = '불가능 (90%)';
             inputStatus.style.color = '#e74c3c'; // 빨간색
@@ -515,22 +504,19 @@ function buildPositionPacket(id, position) {
 
 async function connectMainController() {
     try {
-        const ports = await navigator.serial.getPorts();
-        let targetPort = null;
+        log('[메인] Modbus RTU 컨트롤러 포트를 선택해주세요...');
 
-        for (const port of ports) {
-            const info = port.getInfo();
-            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
-                targetPort = port;
-                break;
-            }
-        }
+        // 이미 사용 중인 포트 목록
+        const alreadyUsedPorts = [sensorPort, servoPort].filter((p) => p !== null);
 
-        if (!targetPort) {
-            log('[메인] 포트를 찾을 수 없습니다. 포트를 선택해주세요...');
-            targetPort = await navigator.serial.requestPort({
-                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-            });
+        const targetPort = await navigator.serial.requestPort({
+            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+        });
+
+        // 이미 사용 중인 포트인지 확인
+        if (alreadyUsedPorts.includes(targetPort)) {
+            log('[메인] 이미 사용 중인 포트입니다. 다른 포트를 선택해주세요.');
+            return false;
         }
 
         mainPort = targetPort;
@@ -580,24 +566,19 @@ async function readMainData() {
 
 async function connectServoController() {
     try {
-        const ports = await navigator.serial.getPorts();
-        let targetPort = null;
+        log('[서보] Dynamixel 컨트롤러 포트를 선택해주세요...');
 
-        for (const port of ports) {
-            const info = port.getInfo();
-            if (info.usbVendorId === 0x0403 && info.usbProductId === 0x6001) {
-                if (port !== mainPort) {
-                    targetPort = port;
-                    break;
-                }
-            }
-        }
+        // 이미 사용 중인 포트 목록
+        const alreadyUsedPorts = [mainPort, sensorPort].filter((p) => p !== null);
 
-        if (!targetPort) {
-            log('[서보] 포트를 찾을 수 없습니다. 포트를 선택해주세요...');
-            targetPort = await navigator.serial.requestPort({
-                filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-            });
+        const targetPort = await navigator.serial.requestPort({
+            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
+        });
+
+        // 이미 사용 중인 포트인지 확인
+        if (alreadyUsedPorts.includes(targetPort)) {
+            log('[서보] 이미 사용 중인 포트입니다. 다른 포트를 선택해주세요.');
+            return false;
         }
 
         servoPort = targetPort;
@@ -853,14 +834,27 @@ async function initializeSystem() {
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     log('PETCUP 시작');
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log('⚠️ 포트 선택 순서: 1) 거리센서 → 2) 메인485 → 3) 서보');
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     const systemBox = document.getElementById('systemBox');
     const systemStatusText = document.getElementById('systemStatusText');
     systemStatusText.textContent = '초기화 중...';
     systemBox.classList.add('disabled');
 
-    // 메인 컨트롤러 연결
-    log('📦 메인 컨트롤러 연결 중...');
+    // 1. 거리 센서 연결 (먼저 연결)
+    log('📏 [1/3] 거리 센서 연결 중...');
+    const sensorConnected = await connectDistanceSensor();
+    if (!sensorConnected) {
+        log('❌ 거리 센서 연결 실패');
+        systemStatusText.textContent = '연결 실패';
+        return;
+    }
+
+    await delay(500);
+
+    // 2. 메인 컨트롤러 연결
+    log('📦 [2/3] 메인 컨트롤러 연결 중...');
     const mainConnected = await connectMainController();
     if (!mainConnected) {
         log('❌ 메인 컨트롤러 연결 실패');
@@ -870,8 +864,8 @@ async function initializeSystem() {
 
     await delay(500);
 
-    // 서보 컨트롤러 연결
-    log('🤖 서보 컨트롤러 연결 중...');
+    // 3. 서보 컨트롤러 연결
+    log('🤖 [3/3] 서보 컨트롤러 연결 중...');
     const servoConnected = await connectServoController();
     if (!servoConnected) {
         log('❌ 서보 컨트롤러 연결 실패');
@@ -916,10 +910,10 @@ async function startProcess() {
     }
 
     // 시스템 연결 상태 확인 및 자동 연결
-    if (!mainWriter || !servoWriter) {
+    if (!mainWriter || !servoWriter || !sensorWriter) {
         log('🔌 시스템이 연결되지 않았습니다. 자동 연결을 시작합니다...');
         const initialized = await initializeSystem();
-        if (!initialized && (!mainWriter || !servoWriter)) {
+        if (!initialized && (!mainWriter || !servoWriter || !sensorWriter)) {
             log('❌ 시스템 연결에 실패했습니다. 프로세스를 시작할 수 없습니다.');
             alert('시스템 연결에 실패했습니다. 하드웨어 연결을 확인하세요.');
             return;
@@ -1160,22 +1154,4 @@ if (!('serial' in navigator)) {
     log('Chrome 또는 Edge 브라우저를 사용하세요.');
     document.getElementById('operationStatus').textContent = '지원 안됨';
     document.getElementById('operationStatus').style.color = '#e74c3c';
-} else {
-    // 페이지 로드 시 자동으로 센서 연결 시작
-    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    log('📡 거리 센서 자동 연결을 시작합니다...');
-    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-    // 2초 후 센서 연결 시도
-    setTimeout(async () => {
-        try {
-            const connected = await connectDistanceSensor();
-            if (connected) {
-                log('✅ 거리 센서가 성공적으로 연결되었습니다.');
-                log('📊 수거 상태 모니터링 시작...');
-            }
-        } catch (error) {
-            log('⚠️ 센서 자동 연결 실패. 수동으로 연결해주세요.');
-        }
-    }, 2000);
 }
