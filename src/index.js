@@ -416,6 +416,12 @@ function buildWriteMultipleRegistersPacket(startAddr, values) {
 // Control Table 주소 (XL430-W250)
 const ADDR_TORQUE_ENABLE = 64;
 const ADDR_GOAL_POSITION = 116;
+const SERVO_DXL_ID = 1;
+const GRIPPER_DXL_ID = 2;
+const SERVO_FORWARD_ANGLE = 180;
+const SERVO_BACKWARD_ANGLE = 226;
+const GRIPPER_OPEN_ANGLE = 196.4;
+const GRIPPER_CLOSE_ANGLE = 226;
 
 // 명령어
 const INST_WRITE = 0x03;
@@ -743,8 +749,8 @@ async function enableTorque(id) {
 }
 
 async function moveGripper(open) {
-    const id = 1;
-    const angle = open ? 160 : 184;
+    const id = GRIPPER_DXL_ID;
+    const angle = open ? GRIPPER_OPEN_ANGLE : GRIPPER_CLOSE_ANGLE;
     const position = Math.round((angle / 360) * 4095);
     const packet = buildPositionPacket(id, position);
     log(`[그리퍼] ${open ? '열기' : '닫기'}: ${angle}° → 위치 ${position}`);
@@ -752,8 +758,8 @@ async function moveGripper(open) {
 }
 
 async function moveServo(forward) {
-    const id = 2;
-    const angle = forward ? 268.3 : 323;
+    const id = SERVO_DXL_ID;
+    const angle = forward ? SERVO_FORWARD_ANGLE : SERVO_BACKWARD_ANGLE;
     const position = Math.round((angle / 360) * 4095);
     const packet = buildPositionPacket(id, position);
     log(`[서보] ${forward ? '앞으로' : '뒤로'} 이동: ${angle}° → 위치 ${position}`);
@@ -877,9 +883,9 @@ async function initializeSystem() {
 
     // 서보 모터 토크 활성화
     log('⚙️ 서보 모터 초기화 중...');
-    await enableTorque(1); // 그리퍼
+    await enableTorque(GRIPPER_DXL_ID); // 그리퍼
     await delay(300);
-    await enableTorque(2); // 메인 서보
+    await enableTorque(SERVO_DXL_ID); // 메인 서보
     await delay(300);
 
     log('✅ 시스템 초기화 완료');
