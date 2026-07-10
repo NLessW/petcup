@@ -32,6 +32,53 @@ const MAX_DISTANCE_MM = 575; // 575mm를 기준으로 설정
 
 // Modbus RTU 설정
 const MODBUS_SLAVE_ID = 1;
+const SERIAL_PORT_STORAGE_PREFIX = 'petcup.serialPort.';
+
+function getSerialPortStorageKey(role) {
+    return `${SERIAL_PORT_STORAGE_PREFIX}${role}`;
+}
+
+function readStoredSerialPort(role) {
+    try {
+        const saved = localStorage.getItem(getSerialPortStorageKey(role));
+        return saved ? JSON.parse(saved) : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function saveSelectedSerialPort(role, port) {
+    try {
+        const grantedPorts = await navigator.serial.getPorts();
+        const info = typeof port.getInfo === 'function' ? port.getInfo() : {};
+        localStorage.setItem(
+            getSerialPortStorageKey(role),
+            JSON.stringify({
+                grantedPortIndex: grantedPorts.indexOf(port),
+                usbVendorId: info.usbVendorId ?? null,
+                usbProductId: info.usbProductId ?? null,
+                savedAt: Date.now(),
+            }),
+        );
+    } catch (error) {
+        log(`[Serial] Failed to save ${role} port: ${error.message}`);
+    }
+}
+
+async function selectSerialPort(role, alreadyUsedPorts) {
+    const saved = readStoredSerialPort(role);
+    const grantedPorts = await navigator.serial.getPorts();
+
+    if (saved && Number.isInteger(saved.grantedPortIndex)) {
+        const savedPort = grantedPorts[saved.grantedPortIndex];
+        if (savedPort && !alreadyUsedPorts.includes(savedPort)) {
+            log(`[Serial] Using saved ${role} port`);
+            return savedPort;
+        }
+    }
+
+    return await navigator.serial.requestPort();
+}
 
 // ========================================
 // Modbus RTU Register Map
@@ -92,9 +139,7 @@ async function connectDistanceSensor() {
         // 이미 사용 중인 포트 제외
         const alreadyUsedPorts = [mainPort, servoPort].filter((p) => p !== null);
 
-        const targetPort = await navigator.serial.requestPort({
-            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-        });
+        const targetPort = await selectSerialPort('sensor', alreadyUsedPorts);
 
         // 이미 사용 중인 포트인지 확인
         if (alreadyUsedPorts.includes(targetPort)) {
@@ -102,6 +147,7 @@ async function connectDistanceSensor() {
             return false;
         }
 
+        await saveSelectedSerialPort('sensor', targetPort);
         sensorPort = targetPort;
         const baudRate = 115200;
         await sensorPort.open({
@@ -515,9 +561,7 @@ async function connectMainController() {
         // 이미 사용 중인 포트 목록
         const alreadyUsedPorts = [sensorPort, servoPort].filter((p) => p !== null);
 
-        const targetPort = await navigator.serial.requestPort({
-            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-        });
+        const targetPort = await selectSerialPort('main', alreadyUsedPorts);
 
         // 이미 사용 중인 포트인지 확인
         if (alreadyUsedPorts.includes(targetPort)) {
@@ -525,6 +569,7 @@ async function connectMainController() {
             return false;
         }
 
+        await saveSelectedSerialPort('main', targetPort);
         mainPort = targetPort;
         await mainPort.open({ baudRate: 9600 });
 
@@ -577,9 +622,7 @@ async function connectServoController() {
         // 이미 사용 중인 포트 목록
         const alreadyUsedPorts = [mainPort, sensorPort].filter((p) => p !== null);
 
-        const targetPort = await navigator.serial.requestPort({
-            filters: [{ usbVendorId: 0x0403, usbProductId: 0x6001 }],
-        });
+        const targetPort = await selectSerialPort('servo', alreadyUsedPorts);
 
         // 이미 사용 중인 포트인지 확인
         if (alreadyUsedPorts.includes(targetPort)) {
@@ -587,6 +630,7 @@ async function connectServoController() {
             return false;
         }
 
+        await saveSelectedSerialPort('servo', targetPort);
         servoPort = targetPort;
         await servoPort.open({ baudRate: 57600 });
 
